@@ -69,7 +69,8 @@ It also searches the console output: **Ctrl+F** highlights every match and steps
 
 ## Quick start
 
-1. Download `LSConsole2.dll` from the latest release and copy it into your Inner Space
+1. Download `LSConsole2.dll` from the [latest release](https://github.com/user01-x/lsconsole2/releases/latest)
+   and copy it into your Inner Space
    `x64\Extensions\ISXDK35` folder (by default
    `C:\Program Files (x86)\InnerSpace\x64\Extensions\ISXDK35`). It's the only file: everything
    else it needs travels inside it.
