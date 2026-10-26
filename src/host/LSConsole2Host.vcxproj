@@ -42,6 +42,8 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <!-- Record only the .pdb's file name, not where it was built (these files are published). -->
+      <AdditionalOptions>/PDBALTPATH:%25_PDB%25 %(AdditionalOptions)</AdditionalOptions>
       <AdditionalLibraryDirectories>$(UltralightDir)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>Ultralight.lib;UltralightCore.lib;WebCore.lib;AppCore.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>

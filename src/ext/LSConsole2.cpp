@@ -23,7 +23,7 @@
 
 #pragma comment(lib, "isxdk.lib")
 
-#define EXTENSION_VERSION "0.1.0-poc"
+#define EXTENSION_VERSION "0.1.0"
 
 class LSConsole2 : public ISXInterface {
 public:
