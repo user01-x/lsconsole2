@@ -574,8 +574,14 @@ void RunLoop()
 
 } // namespace
 
-int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
+int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmd, int)
 {
+	// --runtime <id>: the version the session unpacked; its pipe and mutex carry it (Protocol.h).
+	if (const wchar_t *at = cmd ? wcsstr(cmd, L"--runtime ") : nullptr)
+	{
+		std::wstring id = at + 10;
+		lsc2::RuntimeId() = id.substr(0, id.find(L' '));
+	}
 	HANDLE mutex = CreateMutexW(nullptr, TRUE, lsc2::HostMutexName().c_str());
 	if (!mutex || GetLastError() == ERROR_ALREADY_EXISTS) return 0; // another host is running
 

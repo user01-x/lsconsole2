@@ -44,19 +44,29 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(ISXDKDir)\lib64\vs16;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>user32.lib;gdi32.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>user32.lib;gdi32.lib;advapi32.lib;cabinet.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <!-- The host's runtime, packed for LSConsole2.rc (tools/pack-runtime.ps1); the solution builds the host first. -->
+    <PreBuildEvent>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(MSBuildThisFileDirectory)..\..\tools\pack-runtime.ps1" -HostExe "$(LSConsole2Out)host\LSConsole2Host.exe" -Ultralight "$(UltralightDir)" -Page "$(MSBuildThisFileDirectory)..\page" -Stage "$(LSConsole2Out)runtime" -Out "$(LSConsole2Out)runtime.pack"</Command>
+      <Message>Packing the host runtime</Message>
+    </PreBuildEvent>
+    <ResourceCompile>
+      <AdditionalIncludeDirectories>$(LSConsole2Out);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="LSConsole2.cpp" />
     <ClCompile Include="HostLink.cpp" />
     <ClCompile Include="Overlay.cpp" />
     <ClCompile Include="Metadata.cpp" />
+    <ClCompile Include="Runtime.cpp" />
     <ClCompile Include="..\common\PipeConn.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Console.h" />
     <ClInclude Include="Metadata.h" />
+    <ClInclude Include="Runtime.h" />
     <ClInclude Include="..\common\Protocol.h" />
     <ClInclude Include="..\common\PipeConn.h" />
   </ItemGroup>

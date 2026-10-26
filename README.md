@@ -69,18 +69,10 @@ It also searches the console output: **Ctrl+F** highlights every match and steps
 
 ## Quick start
 
-1. Download the latest release and copy what's inside it into your Inner Space
+1. Download `LSConsole2.dll` from the latest release and copy it into your Inner Space
    `x64\Extensions\ISXDK35` folder (by default
-   `C:\Program Files (x86)\InnerSpace\x64\Extensions\ISXDK35`):
-
-   ```
-   ISXDK35\
-     LSConsole2.dll
-     LSConsole2\
-       LSConsole2Host.exe
-       Ultralight.dll, UltralightCore.dll, WebCore.dll, AppCore.dll
-       assets\  resources\
-   ```
+   `C:\Program Files (x86)\InnerSpace\x64\Extensions\ISXDK35`). It's the only file: everything
+   else it needs travels inside it.
 
 2. In a session's console (or the uplink's), load it:
 
@@ -354,6 +346,11 @@ game or uplink process                                   LSConsole2Host.exe (one
   The host starts with the first session and exits a few minutes after the last one closes.
 - **The console is an ordinary Windows window** owned by the game (or uplink) window. Windows draws
   it over the game, so it needs no Direct3D hooks, no input hooks and no LavishGUI.
+- **One file to install.** The host, Ultralight and the console page travel inside
+  `LSConsole2.dll`, compressed. The first time a version loads, it unpacks them into
+  `%LOCALAPPDATA%\LSConsole2\runtime\<version>\` (about a second, off the game's thread); later loads
+  find them there. A newer version unpacks beside the old one and uses its own host, so updating
+  never needs the old host stopped first; old versions are removed once nothing runs from them.
 - History, layouts and the host's log live in `%LOCALAPPDATA%\LSConsole2`.
 
 ---
@@ -363,9 +360,9 @@ game or uplink process                                   LSConsole2Host.exe (one
 You need Visual Studio 2026 (toolset v145), 7-Zip, and the ISXDK 35 SDK.
 
 ```powershell
-.\build.ps1                      # fetches the Ultralight SDK on first run, builds, stages dist\
+.\build.ps1                      # fetches the Ultralight SDK on first run, builds dist\LSConsole2.dll
 .\build.ps1 /p:ISXDKDir=C:\...   # if the ISXDK is elsewhere (or set the ISXDKDir environment variable)
-.\deploy.ps1                     # copies dist\ into InnerSpace\x64\Extensions\ISXDK35 (needs admin)
+.\deploy.ps1                     # copies it into InnerSpace\x64\Extensions\ISXDK35 (needs admin)
 ```
 
 Unload the extension in every session (`ext -unload LSConsole2`) before deploying, or the DLL is
@@ -380,7 +377,12 @@ locked.
 | `src/metadata` | the built-in metadata |
 | `src/harness` | runs the window and host over a fake game window, for testing without Inner Space |
 | `tests` | completion, history and placeholder tests: `node tests/completion.test.js src/page/console.html` |
-| `tools` | Ultralight download, built-in metadata generator |
+| `tools` | Ultralight download, runtime packing, built-in metadata generator |
+
+Building the extension packs the host's runtime first (`tools/pack-runtime.ps1`, run by the
+project before it compiles): the host, Ultralight and the page are staged in
+`build\x64\Release\runtime\` and compressed into the DLL. The harness runs the host from that staged
+folder.
 
 ---
 
@@ -395,7 +397,8 @@ locked.
 
 - **LSConsole2** itself is released into the public domain ([The Unlicense](LICENSE)).
 - **Ultralight** is not in this repository. `tools/fetch-ultralight.ps1` downloads the free SDK.
-  Its licence (`third_party/ultralight/license/LICENSE.txt`, shipped in releases) allows free
+  Its licence (`third_party/ultralight/license/LICENSE.txt`, carried inside `LSConsole2.dll` and
+  unpacked with the runtime) allows free
   distribution, including commercial use, for individuals and for companies under US$100,000
   annual turnover.
 - **[nlohmann/json](https://github.com/nlohmann/json)** is MIT licensed.

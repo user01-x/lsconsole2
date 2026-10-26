@@ -59,6 +59,7 @@ ULONGLONG g_lastFlush = 0;
 
 // The console bind, while we hold it.
 fLSCommand g_stockConsole = nullptr; // InnerSpace's `console`, while ours stands in for it
+bool g_runtimeFailed = false;        // the runtime couldn't be unpacked: `console` stays stock
 
 void AddLine(std::string s)
 {
@@ -91,28 +92,16 @@ std::string Quote(const std::string &s)
 	return q + "\"";
 }
 
-std::wstring HostExe()
-{
-	wchar_t w[MAX_PATH];
-	MultiByteToWideChar(CP_ACP, 0, ModulePath, -1, w, MAX_PATH);
-	return std::wstring(w) + L"\\LSConsole2\\LSConsole2Host.exe";
-}
-
 bool EnsureStarted()
 {
 	if (g_started) return true;
-	std::wstring exe = HostExe();
-	if (GetFileAttributesW(exe.c_str()) == INVALID_FILE_ATTRIBUTES)
-	{
-		Say("\arthe render host is missing: %s", lsc2::Narrow(exe).c_str());
-		return false;
-	}
+	if (g_runtimeFailed) return false;
 	meta::Load(); // built-ins, published, directory (Metadata.cpp)
 	overlay::Start(); // first: the frame event and the window size must exist before "hello"
 	overlay::SetToggleKey(Parse("${Input.Bind[console].Combo}"));
 	std::string session = Parse("${Session}");
 	overlay::SetLayoutKey(session.empty() ? "default" : session); // where this session's console was put
-	hostlink::Start(exe);
+	hostlink::Start(); // unpacks the runtime first (Runtime.cpp)
 	g_started = true;
 	return true;
 }
@@ -628,6 +617,14 @@ void OnPulse(){
 		else if (t == "values" && m.contains("names") && m["names"].is_array()) SendValues(m.value("chain", ""), m["names"]);
 		else if (t == "scopeVars") SendScopeVars(m.value("chain", ""));
 		else if (t == "_log") Say("%s", m.value("text", "").c_str());
+		else if (t == "_runtimeFailed")
+		{
+			// No host can run, so give the stock console back rather than leave none.
+			g_runtimeFailed = true;
+			overlay::Hide();
+			Say("\arthe console's runtime could not be unpacked (%s); the stock console stays in use", m.value("text", "").c_str());
+			if (g_stockConsole) Exec("console -stock on");
+		}
 		else if (t == "_down") g_pageReady = false;
 	}
 

@@ -4,6 +4,9 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 VisualStudioVersion = 18.0.11528.56
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "LSConsole2", "src\ext\LSConsole2.vcxproj", "{6DA5A62B-34DF-4CBE-8860-7B56ED00CE68}"
+	ProjectSection(ProjectDependencies) = postProject
+		{5E2536A7-9DD9-41D3-8829-5CECFDC0F373} = {5E2536A7-9DD9-41D3-8829-5CECFDC0F373}
+	EndProjectSection
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "LSConsole2Host", "src\host\LSConsole2Host.vcxproj", "{5E2536A7-9DD9-41D3-8829-5CECFDC0F373}"
 EndProject

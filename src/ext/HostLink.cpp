@@ -6,9 +6,11 @@
 #include "Console.h"
 #include "../common/PipeConn.h"
 #include "../common/Protocol.h"
+#include "Runtime.h"
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 namespace hostlink {
 namespace {
@@ -34,12 +36,21 @@ bool Stopping(DWORD waitMs)
 void LaunchHost()
 {
 	std::wstring dir = g_hostExe.substr(0, g_hostExe.find_last_of(L'\\'));
+	std::wstring cmd = L"\"" + g_hostExe + L"\"";
+	if (!lsc2::RuntimeId().empty()) cmd += L" --runtime " + lsc2::RuntimeId();
 	STARTUPINFOW si = {sizeof(si)};
 	PROCESS_INFORMATION pi = {};
 	DWORD flags = CREATE_NO_WINDOW | DETACHED_PROCESS | BELOW_NORMAL_PRIORITY_CLASS;
-	BOOL ok = CreateProcessW(g_hostExe.c_str(), nullptr, nullptr, nullptr, FALSE, flags | CREATE_BREAKAWAY_FROM_JOB,
+	std::vector<wchar_t> line(cmd.begin(), cmd.end());
+	line.push_back(0);
+	BOOL ok = CreateProcessW(g_hostExe.c_str(), line.data(), nullptr, nullptr, FALSE, flags | CREATE_BREAKAWAY_FROM_JOB,
 	                         nullptr, dir.c_str(), &si, &pi);
-	if (!ok) ok = CreateProcessW(g_hostExe.c_str(), nullptr, nullptr, nullptr, FALSE, flags, nullptr, dir.c_str(), &si, &pi);
+	if (!ok)
+	{
+		line.assign(cmd.begin(), cmd.end());
+		line.push_back(0);
+		ok = CreateProcessW(g_hostExe.c_str(), line.data(), nullptr, nullptr, FALSE, flags, nullptr, dir.c_str(), &si, &pi);
+	}
 	if (!ok)
 	{
 		PostToMain({{"t", "_log"}, {"text", "could not start LSConsole2Host.exe (error " + std::to_string(GetLastError()) + ")"}});
@@ -77,6 +88,19 @@ HANDLE OpenPipe()
 
 void Run()
 {
+	// The runtime travels inside this DLL: unpacked here, off the game's thread (about a second the
+	// first time a version loads). Without it there is no console: the session falls back to stock.
+	if (g_hostExe.empty())
+	{
+		std::string error;
+		g_hostExe = runtime::Unpack(error);
+		if (g_hostExe.empty())
+		{
+			PostToMain({{"t", "_runtimeFailed"}, {"text", error}});
+			return;
+		}
+		lsc2::RuntimeId() = runtime::Id();
+	}
 	while (!Stopping(0))
 	{
 		HANDLE p = OpenPipe();

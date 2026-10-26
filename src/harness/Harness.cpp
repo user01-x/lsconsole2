@@ -143,6 +143,9 @@ LRESULT CALLBACK GameProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 
 } // namespace
 
+// Runtime.cpp's module: the harness passes the staged host's path, so nothing is ever unpacked.
+HMODULE g_hModule = nullptr;
+
 void PostToMain(json m)
 {
 	std::lock_guard<std::mutex> lk(g_mu);

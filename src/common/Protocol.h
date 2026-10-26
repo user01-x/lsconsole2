@@ -54,9 +54,15 @@ inline std::wstring Namespace()
 	return GetEnvironmentVariableW(L"LSCONSOLE2_NS", ns, 64) ? std::wstring(L"-") + ns : std::wstring();
 }
 
+// The runtime's version (src/ext/Runtime.cpp), set by the session after unpacking and passed to the
+// host as --runtime <id>. It is part of the host's names, so a new LSConsole2.dll never joins an
+// older host that's still running. Empty for a host started by hand (the test harness).
+inline std::wstring &RuntimeId() { static std::wstring id; return id; }
+inline std::wstring HostSuffix() { return Namespace() + (RuntimeId().empty() ? std::wstring() : L"-" + RuntimeId()); }
+
 // Pipe names are machine-wide, so the user is part of the name.
-inline std::wstring HostPipeName() { return L"\\\\.\\pipe\\lsconsole2-host-" + UserName() + Namespace(); }
-inline std::wstring HostMutexName() { return L"Local\\lsconsole2-host" + Namespace(); }
+inline std::wstring HostPipeName() { return L"\\\\.\\pipe\\lsconsole2-host-" + UserName() + HostSuffix(); }
+inline std::wstring HostMutexName() { return L"Local\\lsconsole2-host" + HostSuffix(); }
 inline std::wstring FrameEventName(DWORD pid) { return L"Local\\lsconsole2-frame-" + std::to_wstring(pid); }
 inline std::wstring SurfaceName(DWORD pid, uint32_t gen)
 {

@@ -11,7 +11,7 @@ using json = nlohmann::json;
 
 // HostLink.cpp -- the pipe to LSConsole2Host.exe, (re)connecting and starting the host as needed.
 namespace hostlink {
-void Start(const std::wstring &hostExe); // idempotent
+void Start(const std::wstring &hostExe = L""); // idempotent; empty: unpack the runtime this DLL carries
 void Stop();
 void Send(const json &j);                // any thread; dropped while disconnected
 bool Connected();

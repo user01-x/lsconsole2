@@ -9,7 +9,6 @@ if (-not (Test-Path (Join-Path $dist 'LSConsole2.dll'))) { throw 'dist\ is empty
 if (-not (Test-Path $ext)) { throw "not an InnerSpace install: $ext" }
 
 Copy-Item (Join-Path $dist 'LSConsole2.dll') $ext -Force
-Copy-Item -Recurse -Force (Join-Path $dist 'LSConsole2') $ext
-# Early builds wrote these next to the exe; the host now keeps them in %LOCALAPPDATA%\LSConsole2.
-foreach ($stale in 'host.log', 'default') { Remove-Item -Recurse -Force (Join-Path $ext "LSConsole2\$stale") -ErrorAction SilentlyContinue }
+# Earlier builds installed the host in an LSConsole2 folder here; it now travels inside the DLL.
+Remove-Item -Recurse -Force (Join-Path $ext 'LSConsole2') -ErrorAction SilentlyContinue
 Write-Host "deployed to $ext"

@@ -1,6 +1,6 @@
-# Stops render hosts started from this repo's dist\ (the harness's), never one running from an
-# InnerSpace install: those belong to live sessions.
-$dist = Join-Path (Split-Path -Parent $PSScriptRoot) 'dist'
+# Stops render hosts started from this repo's build\ folder (the harness's), never one unpacked by a
+# live session (those run from %LOCALAPPDATA%\LSConsole2\runtime).
+$dist = Join-Path (Split-Path -Parent $PSScriptRoot) 'build'
 Get-CimInstance Win32_Process -Filter "Name='LSConsole2Host.exe'" | ForEach-Object {
     $p = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
     $path = try { $p.MainModule.FileName } catch { '' }

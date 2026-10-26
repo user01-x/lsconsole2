@@ -1,3 +1,7 @@
 // Built-in console metadata (README.md, "Console metadata"), one RCDATA resource per document; every
 // RCDATA resource in this DLL is loaded as one, in id order.
 101 RCDATA "..\\metadata\\lavishscript.json"
+
+// The render host's runtime (src/ext/Runtime.cpp), packed into the build folder before compiling.
+// Its own resource type, so the metadata loader never sees it.
+1 LSC2RUNTIME "runtime.pack"

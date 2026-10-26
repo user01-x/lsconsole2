@@ -44,6 +44,7 @@
     <ClCompile Include="Harness.cpp" />
     <ClCompile Include="..\ext\HostLink.cpp" />
     <ClCompile Include="..\ext\Overlay.cpp" />
+    <ClCompile Include="..\ext\Runtime.cpp" />
     <ClCompile Include="..\common\PipeConn.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

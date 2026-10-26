@@ -1,10 +1,9 @@
-# Builds both projects and stages the deployable layout in dist\:
+# Builds the solution and puts the one deployable file in dist\:
 #
-#   dist\LSConsole2.dll                 -> InnerSpace\x64\Extensions\ISXDK35\
-#   dist\LSConsole2\LSConsole2Host.exe      -> InnerSpace\x64\Extensions\ISXDK35\LSConsole2\
-#   dist\LSConsole2\*.dll, resources\      (Ultralight runtime)
-#   dist\LSConsole2\assets\console.html    (the page)
+#   dist\LSConsole2.dll   -> InnerSpace\x64\Extensions\ISXDK35\
 #
+# The host, Ultralight and the page travel inside it (tools/pack-runtime.ps1, run by the LSConsole2
+# project before it compiles; the staged runtime is in build\x64\<config>\runtime\ for the harness).
 # Nothing is copied into InnerSpace here; see deploy.ps1.
 param([string]$Configuration = 'Release')
 $ErrorActionPreference = 'Stop'
@@ -20,17 +19,9 @@ if (-not $msbuild) { throw 'MSBuild not found (vswhere).' }
 if ($LASTEXITCODE -ne 0) { throw "build failed ($LASTEXITCODE)" }
 
 $out = Join-Path $root "build\x64\$Configuration"
-$ul = Join-Path $root 'third_party\ultralight'
 $dist = Join-Path $root 'dist'
-$hostDir = Join-Path $dist 'LSConsole2'
 if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
-New-Item -ItemType Directory -Force (Join-Path $hostDir 'assets') | Out-Null
-
+New-Item -ItemType Directory -Force $dist | Out-Null
 Copy-Item (Join-Path $out 'ext\LSConsole2.dll') $dist
-Copy-Item (Join-Path $out 'host\LSConsole2Host.exe') $hostDir
-Copy-Item (Join-Path $ul 'bin\*.dll') $hostDir
-Copy-Item -Recurse (Join-Path $ul 'resources') $hostDir
-Copy-Item (Join-Path $root 'src\page\*') (Join-Path $hostDir 'assets')
-Copy-Item (Join-Path $ul 'license\*') (Join-Path $hostDir 'resources')
 
 Write-Host "staged: $dist"
