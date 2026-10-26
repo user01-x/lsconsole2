@@ -1,0 +1,1432 @@
+<!DOCTYPE html>
+<!--
+  The console page. Rendered by LSConsole2Host.exe and shown in the session's overlay window.
+  Talks to the extension and the host through two functions:
+    lsc2Send(json)  -> out
+    lsc2.rx(msg)     <- in
+  In:  reset, lines {lines[]}, focusInput, history {items[] oldest first}, histAdd {c},
+       ac {data: any of types, tlos, events, commands, aliases [{n, w}], scripts, files,
+       variables [{n, v}]}, members {name, type, members[], methods[]}, paste {text}
+  Out: ready, exec {text}, focus, copy {text}, paste, members {name}
+
+  Find (ctrl+F): a bar above the input line; Enter = older match, Shift+Enter = newer, wrapping;
+  Alt+C case, Alt+R regex, Alt+W whole word, Alt+F only matching lines; Esc closes.
+  Paste (ctrl+V, Shift+Insert): one line only; more is refused with a message (the user's spec).
+
+  Autocomplete (the user's spec, 2026-10-26). "The beginning" of the input is its start, or the
+  first token after `relay <where> ` (<where> may be a quoted phrase). Lists:
+    - history: a first word (at the beginning) from "hist" to "history"; the words after it filter
+      it, all must match, case-insensitive, "quoted words" are one substring;
+    - commands, aliases, variables and top-level objects: the first token at the beginning;
+    - members after `name.`, methods after `name:` (name a variable or top-level object): at the
+      beginning, and inside an unclosed `${`; "name" may be a chain (OgreBotAPI.Bot:, Me.Group[1].);
+      the type comes from the extension (${chain(type)});
+    - running scripts: after `end ` / `endscript ` at the beginning, and inside `Script[`;
+    - script files: after `run ` / `runscript ` at the beginning;
+    - types: the <type> of `declare[variable] <varname> <type> <scope> <value>` at the beginning;
+    - events: inside `Event[`;
+    - top-level objects and variables: inside an unclosed `${`, before any . [ : (
+  Ranking: starts with what was typed (same case, then any case), then contains it (same case,
+  then any case); then shortest first, then alphabetical.
+  Keys: Up/Down move; Tab accepts; Enter accepts unless what's typed already is the highlighted
+  entry (then it runs) -- history entries are always accepted, never run. Esc hides the list until
+  the input is emptied or Alt+Enter; Esc with no list clears the input line.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: rgba(17, 20, 26, 0.94);
+    --edge: #3b4252;
+    --fg: #d8dee9;
+    --dim: #7b8394;
+    --echo: #88c0d0;
+    --input-bg: rgba(0, 0, 0, 0.35);
+    --sel: rgba(136, 192, 208, 0.35);
+    --ac-bg: rgba(8, 10, 14, 0.96);
+    --ac-sel: rgba(136, 192, 208, 0.22);
+    --mark: #ebcb8b;
+  }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  #root {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    background: var(--bg); border: 2px solid var(--edge);
+    font: 13px/1.35 Consolas, "Cascadia Mono", monospace; color: var(--fg);
+  }
+  #out { flex: 1; overflow-y: auto; padding: 6px 10px; white-space: pre-wrap; word-break: break-word; }
+  #out div { min-height: 1.35em; }
+  #out .echo { color: var(--echo); }
+  ::selection { background: var(--sel); }
+
+  #ac { display: none; flex-direction: column; max-height: 45%; background: var(--ac-bg); border-top: 1px solid var(--edge); }
+  #ac.on { display: flex; }
+  #ac-head { color: var(--dim); font-size: 11px; padding: 3px 10px; border-bottom: 1px solid var(--edge); }
+  #ac-list { overflow-y: auto; }
+  #ac-list > div { display: flex; padding: 1px 10px 1px 22px; cursor: default; }
+  #ac-list > div.sel { background: var(--ac-sel); }
+  #ac-list .v { white-space: pre; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
+  #ac-list .n { color: var(--dim); white-space: pre; overflow: hidden; text-overflow: ellipsis; flex: 1 1 0; padding-left: 14px; }
+  #ac-list .k { color: var(--dim); font-size: 11px; padding-left: 10px; flex: 0 0 auto; }
+  #ac-list mark { background: none; color: var(--mark); }
+  #ac-list .n.val { font-style: italic; }   /* a variable's value: shown, never inserted */
+  #ac-list .sig { color: var(--dim); white-space: pre; flex: 0 0 auto; }   /* [params] -> returns */
+  #ac-list > div.missing .v, #ac-list > div.missing .sig { opacity: 0.45; text-decoration: line-through; }
+  #ac-list > div.missing .k { color: #ebcb8b; }
+  #ac-desc { display: none; color: var(--fg); font-size: 12px; padding: 3px 10px; border-top: 1px solid var(--edge); }
+  #ac-desc.on { display: block; }
+  #ac-desc .warn { color: #ebcb8b; }
+  #hint { display: none; padding: 2px 10px; border-top: 1px solid var(--edge); background: var(--ac-bg); color: var(--dim);
+    font-size: 12px; white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+  #hint.on { display: block; }
+  #hint b { color: var(--mark); font-weight: normal; text-decoration: underline; }
+  #hint .ret, #hint .about { color: var(--dim); }
+
+  #find { display: none; align-items: center; gap: 4px; padding: 3px 10px; border-top: 1px solid var(--edge); background: var(--ac-bg); }
+  #find.on { display: flex; }
+  #find input { flex: 0 1 320px; min-width: 120px; border: 1px solid var(--edge); outline: 0; background: rgba(0, 0, 0, 0.4);
+    color: var(--fg); font: inherit; padding: 1px 6px; }
+  #find input.bad { border-color: #e06c75; }
+  #find button { border: 1px solid transparent; background: none; color: var(--dim); font: inherit; font-size: 12px;
+    padding: 0 6px; cursor: default; }
+  #find button.on { color: var(--fg); border-color: var(--edge); background: rgba(136, 192, 208, 0.18); }
+  #find-count { color: var(--dim); font-size: 12px; min-width: 70px; padding-left: 4px; }
+  #find-count.none { color: #e06c75; }
+  mark.find { background: rgba(235, 203, 139, 0.28); color: inherit; }
+  mark.find.cur { background: rgba(235, 203, 139, 0.75); color: #11141a; }
+  #out .msg { color: #e06c75; }
+
+  #bar { display: flex; align-items: center; border-top: 1px solid var(--edge); background: var(--input-bg); }
+  #bar > span { color: var(--echo); padding: 0 6px 0 10px; }
+  #inwrap { flex: 1; position: relative; display: flex; min-width: 0; }
+  #in, #mirror { font: inherit; line-height: 18px; padding: 5px 10px 5px 0; }
+  #in {
+    flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; position: relative;
+    color: transparent; caret-color: var(--fg); /* the mirror under it draws the text */
+  }
+  #in::selection { color: transparent; background: var(--sel); }
+  #mirror {
+    position: absolute; left: 0; top: 0; right: 0; bottom: 0; color: var(--fg);
+    white-space: pre; overflow: hidden; pointer-events: none;
+  }
+  /* brackets: the pair touching the caret, the pair around it, unmatched */
+  #mirror .br-at { color: #11141a; background: #e5c07b; border-radius: 2px; }
+  #mirror .br-in { color: #11141a; background: #61afef; border-radius: 2px; }
+  #mirror .br-bad { color: #e06c75; text-decoration: underline; }
+  #out .time { color: var(--dim); }
+  /* LavishScript colour codes: \a + letter */
+  .c-r { color: #e06c75; } .c-g { color: #98c379; } .c-y { color: #e5c07b; } .c-o { color: #d19a66; }
+  .c-u { color: #61afef; } .c-t { color: #56b6c2; } .c-p, .c-m { color: #c678dd; } .c-w { color: #ffffff; }
+  .c-b { color: #5c6370; }
+</style>
+</head>
+<body>
+<div id="root">
+  <div id="out"></div>
+  <div id="find">
+    <input id="find-q" spellcheck="false" autocomplete="off" placeholder="find">
+    <button id="find-case" title="Match case (Alt+C)">Aa</button>
+    <button id="find-re" title="Regular expression (Alt+R)">.*</button>
+    <button id="find-word" title="Whole word (Alt+W)"><u>ab</u></button>
+    <button id="find-filter" title="Show only matching lines (Alt+F)">filter</button>
+    <span id="find-count"></span>
+    <button id="find-up" title="Older match (Enter)">&#8593;</button>
+    <button id="find-down" title="Newer match (Shift+Enter)">&#8595;</button>
+    <button id="find-close" title="Close (Esc)">&#215;</button>
+  </div>
+  <div id="ac"><div id="ac-head"></div><div id="ac-list"></div><div id="ac-desc"></div></div>
+  <div id="hint"></div>
+  <div id="bar"><span>&gt;</span><div id="inwrap"><div id="mirror"></div><input id="in" spellcheck="false" autocomplete="off"></div></div>
+</div>
+<script>
+(function () {
+  var out = document.getElementById('out');
+  var input = document.getElementById('in');
+  var acBox = document.getElementById('ac');
+  var acHead = document.getElementById('ac-head');
+  var acList = document.getElementById('ac-list');
+  var acDesc = document.getElementById('ac-desc');
+  var hintEl = document.getElementById('hint');
+  var MAX_DOM = 5000;   // output lines kept in the page
+  var HIST_MAX = 200;   // history matches listed
+  var LIST_MAX = 100;   // other matches listed
+
+  var history = [];     // oldest first, no duplicates; the host's, shared by every session
+  var hpos = -1;        // Up/Down recall position when no list is shown
+  var data = { types: [], tlos: [], events: [], commands: [], aliases: [], scripts: [], files: [], variables: [] };
+  // The open list: entries {v: value, k: kind, n: note}, the range of the input it replaces,
+  // what was typed there, and whether it's the history list.
+  var ac = { on: false, suppressed: false, items: [], total: 0, sel: 0, from: 0, to: 0, token: '', tokens: [], history: false, title: '' };
+
+  function send(m) { if (window.lsc2Send) lsc2Send(JSON.stringify(m)); }
+
+  // A key's name. Ultralight builds key events from raw Windows messages and leaves e.key
+  // 'Unidentified' for some keys (Esc among them), so fall back to the key code.
+  var KEY_NAMES = { 8: 'Backspace', 9: 'Tab', 13: 'Enter', 27: 'Escape', 33: 'PageUp', 34: 'PageDown', 35: 'End',
+    36: 'Home', 37: 'ArrowLeft', 38: 'ArrowUp', 39: 'ArrowRight', 40: 'ArrowDown', 45: 'Insert', 46: 'Delete' };
+  function keyName(e) {
+    if (e.key && e.key !== 'Unidentified') return e.key;
+    if (KEY_NAMES[e.keyCode]) return KEY_NAMES[e.keyCode];
+    if (e.keyCode >= 65 && e.keyCode <= 90) return String.fromCharCode(e.keyCode).toLowerCase();
+    return e.key || '';
+  }
+
+  // ------------------------------------------------------------------------------------------
+  // Output
+  // ------------------------------------------------------------------------------------------
+  function atBottom() { return out.scrollHeight - out.scrollTop - out.clientHeight < 4; }
+
+  // A console line as coloured runs [{s, c}] and its plain text. \x01 marks our own echo
+  // (\x01HH:MM:SS\x01command, the time it was entered; older lines have no time);
+  // \x07 + letter is a colour code (\x07x / \x07- resets, \x07-<letter> is the dark variant, shown
+  // here as the same colour).
+  function parseLine(text) {
+    if (text.charAt(0) === '\x01') {
+      var t = /^\x01(\d\d:\d\d:\d\d)\x01/.exec(text), e = '> ' + text.slice(t ? t[0].length : 1);
+      if (!t) return { cls: 'echo', runs: [{ s: e, c: '' }], plain: e };
+      return { cls: 'echo', runs: [{ s: t[1] + ' ', c: 'time' }, { s: e, c: '' }], plain: t[1] + ' ' + e };
+    }
+    if (text.charAt(0) === '\x02') { var g = text.slice(1); return { cls: 'msg', runs: [{ s: g, c: '' }], plain: g }; }
+    var runs = [], cls = '', buf = '', plain = '';
+    for (var i = 0; i < text.length; i++) {
+      var ch = text.charAt(i);
+      if (ch === '\x07' && i + 1 < text.length) {
+        if (buf) { runs.push({ s: buf, c: cls }); plain += buf; buf = ''; }
+        var code = text.charAt(++i);
+        if (code === '-' && i + 1 < text.length) code = text.charAt(++i);
+        cls = (code === 'x' || code === '-') ? '' : 'c-' + code.toLowerCase();
+        continue;
+      }
+      buf += ch;
+    }
+    if (buf) { runs.push({ s: buf, c: cls }); plain += buf; }
+    return { cls: '', runs: runs, plain: plain };
+  }
+
+  // (Re)fill a line's element: its runs, with the search ranges [[start, end], ...] (on the plain
+  // text) marked, range `cur` as the current match.
+  function fillLine(d, ranges, cur) {
+    var p = d._p, pos = 0, ri = 0;
+    d.textContent = '';
+    for (var r = 0; r < p.runs.length; r++) {
+      var s = p.runs[r].s, c = p.runs[r].c, i = 0;
+      while (i < s.length) {
+        var abs = pos + i;
+        while (ranges && ri < ranges.length && ranges[ri][1] <= abs) ri++;
+        var inside = ranges && ri < ranges.length && ranges[ri][0] <= abs;
+        var end = s.length;
+        if (ranges && ri < ranges.length) end = Math.min(s.length, (inside ? ranges[ri][1] : ranges[ri][0]) - pos);
+        var el = document.createElement(inside ? 'mark' : 'span');
+        el.className = (c ? c + ' ' : '') + (inside ? (ri === cur ? 'find cur' : 'find') : '');
+        el.textContent = s.slice(i, end);
+        d.appendChild(el);
+        i = end;
+      }
+      pos += s.length;
+    }
+    d._marked = !!(ranges && ranges.length);
+  }
+
+  function lineEl(text) {
+    var d = document.createElement('div');
+    d._p = parseLine(text);
+    if (d._p.cls) d.className = d._p.cls;
+    fillLine(d, find.on ? find.match(d._p.plain) : null, -1);
+    return d;
+  }
+
+  function addLines(lines) {
+    var stick = atBottom();
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < lines.length; i++) frag.appendChild(lineEl(lines[i]));
+    out.appendChild(frag);
+    while (out.childNodes.length > MAX_DOM) out.removeChild(out.firstChild);
+    if (find.on) findSoon();
+    if (stick) out.scrollTop = out.scrollHeight;
+  }
+
+  // A line of the console's own (a rejected paste, ...): red, page only.
+  function note(text) { addLines(['\x02' + text]); out.scrollTop = out.scrollHeight; }
+
+  // ------------------------------------------------------------------------------------------
+  // Find (ctrl+F) over the output
+  // ------------------------------------------------------------------------------------------
+  var findBar = document.getElementById('find'), findQ = document.getElementById('find-q');
+  var findCount = document.getElementById('find-count');
+  var find = { on: false, cs: false, re: false, word: false, filter: false, list: [], cur: -1, match: null, timer: 0 };
+
+  // A matcher for the current query: plain text -> [[start, end], ...] or null. Invalid regex: none.
+  function buildMatcher() {
+    var q = findQ.value;
+    findQ.classList.remove('bad');
+    if (!q) return null;
+    var src = find.re ? q : q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (find.word) src = '\\b(?:' + src + ')\\b';
+    var rx;
+    try { rx = new RegExp(src, find.cs ? 'g' : 'gi'); } catch (e) { findQ.classList.add('bad'); return null; }
+    return function (plain) {
+      var ranges = [], m;
+      rx.lastIndex = 0;
+      while ((m = rx.exec(plain))) {
+        if (m[0].length === 0) { rx.lastIndex++; continue; }
+        ranges.push([m.index, m.index + m[0].length]);
+      }
+      return ranges.length ? ranges : null;
+    };
+  }
+
+  // Search every line again. keepPlace: stay on the same match (as near as possible).
+  function runFind(keepPlace) {
+    var prev = keepPlace && find.cur >= 0 ? find.list[find.cur] : null;
+    find.match = find.on ? buildMatcher() : null;
+    find.list = [];
+    var lines = out.children;
+    for (var i = 0; i < lines.length; i++) {
+      var d = lines[i], ranges = find.match ? find.match(d._p.plain) : null;
+      if (ranges) for (var k = 0; k < ranges.length; k++) find.list.push({ d: d, k: k });
+      if (ranges || d._marked) fillLine(d, ranges, -1);
+      d.style.display = find.on && find.filter && find.match && !ranges ? 'none' : '';
+    }
+    find.cur = find.list.length - 1; // newest
+    if (prev) for (var j = 0; j < find.list.length; j++)
+      if (find.list[j].d === prev.d && find.list[j].k === prev.k) { find.cur = j; break; }
+    showCurrent(!keepPlace);
+  }
+
+  var findTimer = 0;
+  function findSoon() { if (!findTimer) findTimer = setTimeout(function () { findTimer = 0; runFind(true); }, 100); }
+
+  function showCurrent(scroll) {
+    var n = find.list.length;
+    findCount.textContent = !findQ.value ? '' : n ? (find.cur + 1) + ' / ' + n : 'no results';
+    findCount.classList.toggle('none', !!findQ.value && !n);
+    if (find.cur < 0 || find.cur >= n) return;
+    var at = find.list[find.cur];
+    fillLine(at.d, find.match(at.d._p.plain), at.k);
+    if (scroll) {
+      var top = at.d.offsetTop - out.offsetTop;
+      if (top < out.scrollTop || top + at.d.offsetHeight > out.scrollTop + out.clientHeight)
+        out.scrollTop = Math.max(0, top - out.clientHeight / 2);
+    }
+  }
+
+  // delta -1: older (up), +1: newer (down); wraps.
+  function stepFind(delta) {
+    var n = find.list.length;
+    if (!n) return;
+    var old = find.list[find.cur];
+    if (old) fillLine(old.d, find.match(old.d._p.plain), -1);
+    find.cur = (find.cur + delta + n) % n;
+    showCurrent(true);
+  }
+
+  function openFind() {
+    var sel = String(window.getSelection() || '');
+    if (sel && sel.indexOf('\n') < 0) findQ.value = sel;
+    find.on = true;
+    findBar.classList.add('on');
+    findQ.focus();
+    findQ.select();
+    runFind(false);
+  }
+
+  function closeFind() {
+    find.on = false;
+    findBar.classList.remove('on');
+    runFind(false); // clears marks and the filter
+    findCount.textContent = '';
+    input.focus();
+  }
+
+  function toggle(name, btn) {
+    find[name] = !find[name];
+    btn.classList.toggle('on', find[name]);
+    runFind(true);
+    findQ.focus();
+  }
+  var btnCase = document.getElementById('find-case'), btnRe = document.getElementById('find-re');
+  var btnWord = document.getElementById('find-word'), btnFilter = document.getElementById('find-filter');
+  btnCase.addEventListener('click', function () { toggle('cs', btnCase); });
+  btnRe.addEventListener('click', function () { toggle('re', btnRe); });
+  btnWord.addEventListener('click', function () { toggle('word', btnWord); });
+  btnFilter.addEventListener('click', function () { toggle('filter', btnFilter); });
+  document.getElementById('find-up').addEventListener('click', function () { stepFind(-1); findQ.focus(); });
+  document.getElementById('find-down').addEventListener('click', function () { stepFind(1); findQ.focus(); });
+  document.getElementById('find-close').addEventListener('click', closeFind);
+  findBar.addEventListener('mousedown', function (e) { if (e.target !== findQ) e.preventDefault(); }); // buttons keep focus
+  findQ.addEventListener('input', function () { runFind(false); });
+  findQ.addEventListener('keydown', function (e) {
+    var key = keyName(e);
+    if (key === 'Enter') { stepFind(e.shiftKey ? 1 : -1); e.preventDefault(); }
+    else if (key === 'Escape') { closeFind(); e.preventDefault(); }
+    else if (e.altKey && key === 'c') { toggle('cs', btnCase); e.preventDefault(); }
+    else if (e.altKey && key === 'r') { toggle('re', btnRe); e.preventDefault(); }
+    else if (e.altKey && key === 'w') { toggle('word', btnWord); e.preventDefault(); }
+    else if (e.altKey && key === 'f') { toggle('filter', btnFilter); e.preventDefault(); }
+  });
+
+  // ------------------------------------------------------------------------------------------
+  // What to complete
+  // ------------------------------------------------------------------------------------------
+
+  // Where "the beginning" is: 0 (after leading spaces), or past `relay <where> `.
+  function beginningAt(text) {
+    var m = /^\s*relay\s+("[^"]*"|\S+)\s+/i.exec(text);
+    return m ? m[0].length : /^\s*/.exec(text)[0].length;
+  }
+
+  // "hist", "histo" ... "history" as the first word -> the filter words after it (lower case);
+  // anything else -> null.
+  function historyQuery(text) {
+    var m = /^\s*(\S+)([\s\S]*)$/.exec(text);
+    if (!m) return null;
+    var w = m[1].toLowerCase();
+    if (w.length < 4 || 'history'.indexOf(w) !== 0) return null;
+    if (m[2] === '') return []; // "hist" alone: everything
+    if (!/^\s/.test(m[2])) return null;
+    return words(m[2]);
+  }
+
+  // Whitespace-separated words; "a quoted run" is one word (an unclosed quote runs to the end).
+  function words(s) {
+    var found = [], i = 0;
+    while (i < s.length) {
+      while (i < s.length && /\s/.test(s.charAt(i))) i++;
+      if (i >= s.length) break;
+      var w;
+      if (s.charAt(i) === '"') {
+        var end = s.indexOf('"', i + 1);
+        if (end < 0) end = s.length;
+        w = s.slice(i + 1, end);
+        i = end + 1;
+      } else {
+        var j = i;
+        while (j < s.length && !/\s/.test(s.charAt(j))) j++;
+        w = s.slice(i, j);
+        i = j;
+      }
+      if (w) found.push(w.toLowerCase());
+    }
+    return found;
+  }
+
+  function matchesAll(entry, tokens) {
+    var e = entry.toLowerCase();
+    for (var i = 0; i < tokens.length; i++) if (e.indexOf(tokens[i]) < 0) return false;
+    return true;
+  }
+
+  // The variables, with their values when the extension sent them ({n, v}); the value is shown
+  // in the list, never inserted.
+  function variables() {
+    var r = [];
+    for (var i = 0; i < data.variables.length; i++) {
+      var x = data.variables[i];
+      r.push(typeof x === 'string' ? { v: x, k: 'variable' } : { v: x.n, k: 'variable', val: x.v });
+    }
+    return r;
+  }
+
+  function named(list, kind) {
+    var r = [];
+    for (var i = 0; i < list.length; i++) r.push({ v: list[i], k: kind });
+    return r;
+  }
+
+  // ------------------------------------------------------------------------------------------
+  // Metadata: what members, methods, objects and commands take and return
+  // ------------------------------------------------------------------------------------------
+  // meta.commands / objects / events: lower-case name -> entry. A type's documentation arrives with
+  // its members (typeInfo[...].docs, the same shape).
+  var meta = { commands: {}, objects: {}, events: {} };
+  function has(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
+  function byLower(obj) {
+    var r = {};
+    if (obj) for (var k in obj) if (has(obj, k)) r[k.toLowerCase()] = extend(obj[k], { _n: k }); // _n: as written
+    return r;
+  }
+  function extend(a, b) { var r = {}, k; for (k in a) if (has(a, k)) r[k] = a[k]; for (k in b) if (has(b, k)) r[k] = b[k]; return r; }
+
+  // Entries -> one row per documented form (the user's decision), each carrying its doc and form.
+  function withForms(entries, lookup) {
+    var out = [];
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i], d = lookup ? lookup[String(e.v).toLowerCase()] : null;
+      if (d && d.forms && d.forms.length) for (var f = 0; f < d.forms.length; f++) out.push(extend(e, { doc: d, form: d.forms[f] }));
+      else out.push(d ? extend(e, { doc: d }) : e);
+    }
+    return out;
+  }
+
+  var CALL_KINDS = { member: 1, method: 1, object: 1, missing: 1 };
+
+  // How a parameter reads in a signature.
+  function paramLabel(p, command) {
+    if (p.literal) return p.literal;
+    var n = p.values && p.values.length > 1 && (!p.name || p.name === 'option') ? p.values.join('|') : p.name || '?';
+    if (p.repeat) n += '...';
+    return p.optional ? (command ? '[' + n + ']' : n + '?') : n;
+  }
+
+  // "[a, b] -> type" for calls, " a [b]" for commands.
+  function signature(it) {
+    if (!it.form) return '';
+    var ps = it.form.params || [], call = CALL_KINDS[it.k], parts = [];
+    for (var i = 0; i < ps.length; i++) parts.push(paramLabel(ps[i], !call));
+    var s = call ? (ps.length ? '[' + parts.join(', ') + ']' : '') : (ps.length ? ' ' + parts.join(' ') : '');
+    if (it.form.returns) s += ' → ' + it.form.returns;
+    return s;
+  }
+
+  // ------------------------------------------------------------------------------------------
+  // Types: what a name or a chain holds
+  // ------------------------------------------------------------------------------------------
+  // The members and methods of what a name or a chain holds (`Me`, `OgreBotAPI.Bot`, `Me.Group[1]`),
+  // from the extension, which evaluates ${chain(type)}; kept 30 s per chain. Asked for once at a time;
+  // the list fills in when the answer arrives. A type by name (for chains resolved through documented
+  // return types) is kept as "@type".
+  var typeInfo = {}, typeAsked = {};
+  function typeOf(root) {
+    var info = typeInfo[root];
+    if ((!info || Date.now() - info.at > 30000) && !typeAsked[root]) {
+      typeAsked[root] = true;
+      send({ t: 'members', name: root });
+    }
+    return info;
+  }
+  function typeByName(type) {
+    var key = '@' + type, info = typeInfo[key];
+    if ((!info || Date.now() - info.at > 30000) && !typeAsked[key]) {
+      typeAsked[key] = true;
+      send({ t: 'members', type: type });
+    }
+    return info;
+  }
+
+  // "a.b[x,y].c" -> ["a", "b[x,y]", "c"] (dots inside brackets don't split)
+  function splitChain(chain) {
+    var segs = [], depth = 0, start = 0;
+    for (var i = 0; i < chain.length; i++) {
+      var ch = chain.charAt(i);
+      if (ch === '[') depth++;
+      else if (ch === ']') depth--;
+      else if (ch === '.' && depth === 0) { segs.push(chain.slice(start, i)); start = i + 1; }
+    }
+    segs.push(chain.slice(start));
+    return segs;
+  }
+
+  function argCount(args) {
+    if (!/\S/.test(args)) return 0;
+    var n = 1, depth = 0;
+    for (var i = 0; i < args.length; i++) {
+      var ch = args.charAt(i);
+      if (ch === '[') depth++; else if (ch === ']') depth--; else if (ch === ',' && depth === 0) n++;
+    }
+    return n;
+  }
+
+  // What a documented entry returns when called with n arguments: the form with that many
+  // parameters (optional ones may be left out), else the first form that returns something.
+  function formReturn(d, n) {
+    if (!d || !d.forms) return null;
+    var any = null;
+    for (var i = 0; i < d.forms.length; i++) {
+      var f = d.forms[i], ps = f.params || [], need = 0;
+      for (var k = 0; k < ps.length; k++) if (!ps[k].optional && !ps[k].literal) need++;
+      if (f.returns && n >= need && (n <= ps.length || (ps.length && ps[ps.length - 1].repeat))) return f.returns;
+      if (f.returns && !any) any = f.returns;
+    }
+    return any;
+  }
+
+  // The type a chain holds, through documented return types: the root's live type (or a
+  // documented object's return), then each member's documented return. A string when it resolved;
+  // 'pending' while documentation is on its way; null when the documentation runs out.
+  function resolveChain(chain) {
+    var segs = splitChain(chain);
+    if (segs.length < 2 && !/\[/.test(chain)) return null;
+    var m = /^([A-Za-z_][A-Za-z0-9_]*)(\[([^\]]*)\])?$/.exec(segs[0]), type;
+    if (!m) return null;
+    if (m[2]) type = formReturn(meta.objects[m[1].toLowerCase()], argCount(m[3]));
+    else { var ri = typeOf(m[1]); if (!ri) return 'pending'; type = ri.type; }
+    for (var k = 1; k < segs.length && type; k++) {
+      var ti = typeByName(type);
+      if (!ti) return 'pending';
+      var mm = /^([A-Za-z_][A-Za-z0-9_]*)(\[([^\]]*)\])?$/.exec(segs[k]);
+      if (!mm) return null;
+      type = formReturn(ti.docs.members[mm[1].toLowerCase()], mm[2] ? argCount(mm[3]) : 0);
+    }
+    return type || null;
+  }
+
+  // The type information to complete `chain.` / `chain:` from: documented return types first; the
+  // live ${chain(type)} check otherwise -- also while the documented route is still being looked up,
+  // so a chain with no documentation doesn't wait on it.
+  function chainInfo(chain) {
+    var t = resolveChain(chain);
+    if (t && t !== 'pending') { var ti = typeByName(t); if (ti) return ti; }
+    return typeOf(chain);
+  }
+
+  // `chain.` -> its members, `chain:` -> its methods, one row per documented form. Documented
+  // members the live type lacks are listed too, greyed with a warning mark (the user's decision).
+  function memberContext(root, sep, token, from) {
+    var info = chainInfo(root), methods = sep === ':', kind = methods ? 'method' : 'member';
+    var title = (methods ? 'methods of ' : 'members of ') + root + (info ? ' (' + (info.type || 'type unknown') + ')' : '');
+    var entries = [];
+    if (info) {
+      var live = methods ? info.methods : info.members, docs = methods ? info.docs.methods : info.docs.members;
+      var names = info.live ? live : Object.keys(docs).map(function (k) { return docs[k]._n || k; });
+      entries = withForms(named(names, kind), docs);
+      if (info.live) {
+        var seen = {};
+        for (var i = 0; i < live.length; i++) seen[String(live[i]).toLowerCase()] = 1;
+        var gone = [];
+        for (var k in docs) if (has(docs, k) && !seen[k]) gone.push({ v: docs[k]._n || k, k: 'missing', missing: true });
+        entries = entries.concat(withForms(gone, docs));
+      }
+    }
+    if (!methods && SCOPE_RE.test(root)) entries = named(scopeVarsOf(root), 'variable').concat(entries);
+    return { title: title, entries: entries, token: token, from: from, all: true, chain: methods ? '' : root };
+  }
+
+  // Script[x].VariableScope. also lists that script's variables (the user, 2026-10-26: "only after
+  // Script[x].VariableScope. and fetch it on the fly there"): asked of the extension, kept 3 s.
+  var SCOPE_RE = /^Script\[[^\]]*\]\.VariableScope$/i, scopeVars = {}, scopeAsked = {};
+  function scopeVarsOf(root) {
+    var c = scopeVars[root];
+    if ((!c || Date.now() - c.at > 3000) && !scopeAsked[root]) {
+      scopeAsked[root] = true;
+      send({ t: 'scopeVars', chain: root });
+    }
+    return c ? c.names : [];
+  }
+
+  // lsconsole2 exclude (the extension sends the map, {s, r}): text kept out of completions. No
+  // replacement (r null): a completion containing it isn't listed, and a value preview containing
+  // it isn't shown. A replacement is shown in its place; accepting still inserts the real text.
+  // Case is ignored. Longest first, so "Stormfall" is swapped before "Storm".
+  var excludes = [];
+  function leftOut(s) {
+    s = String(s).toLowerCase();
+    for (var i = 0; i < excludes.length; i++)
+      if (excludes[i].r == null && s.indexOf(String(excludes[i].s).toLowerCase()) >= 0) return true;
+    return false;
+  }
+  function swapped(s) {
+    s = String(s);
+    for (var i = 0; i < excludes.length; i++) {
+      var e = excludes[i];
+      if (e.r == null) continue;
+      var low = s.toLowerCase(), needle = String(e.s).toLowerCase(), out = '', at = 0, j;
+      while ((j = low.indexOf(needle, at)) >= 0) { out += s.slice(at, j) + e.r; at = j + needle.length; }
+      s = out + s.slice(at);
+    }
+    return s;
+  }
+  // An item as shown: the name swapped (d), and the value preview (val, or an alias's n) swapped or
+  // dropped. Leaving out the items themselves is the caller's (leftOut).
+  function dressed(it) {
+    var x = {}, shown = swapped(it.v);
+    if (shown !== String(it.v)) x.d = shown;
+    if (it.val !== undefined && it.val !== null) x.val = leftOut(it.val) ? undefined : swapped(it.val);
+    if (it.n) x.n = leftOut(it.n) ? undefined : swapped(it.n);
+    return extend(it, x);
+  }
+
+  // Members' values, like variables' (`${Me.Na` -> Name (Stormfall)): asked of the extension, which
+  // reads only basic types. Asked only once something has been typed after the ".", only for the
+  // best 15 matches, never for methods -- reading every member of something can print errors or ask
+  // the server. Kept 3 s per chain.member; a member that isn't a basic type is remembered as such.
+  var memberValues = {}, valuesAsked = {};
+  function withMemberValues(chain, token, items) {
+    var want = [], now = Date.now(), out = [], asked = {};
+    for (var i = 0; i < items.length; i++) {
+      var key = chain + '.' + items[i].v, c = memberValues[key], it = items[i];
+      if (c && c.v !== null) it = extend(it, { val: c.v });
+      out.push(it);
+      if (token && !it.missing && want.length < 15 && !asked[key] && (!c || now - c.at > 3000) && !valuesAsked[key]) {
+        valuesAsked[key] = asked[key] = true;
+        want.push(items[i].v);
+      }
+    }
+    if (want.length) send({ t: 'values', chain: chain, names: want });
+    return out;
+  }
+
+  // A chain of names joined by ".", each optionally with [arguments], then "." or ":" and what's
+  // been typed of the next name: (chain)(sep)(token).
+  var CHAIN_SEP = /^([A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?(?:\.[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?)*)([.:])([A-Za-z0-9_]*)$/;
+  var CHAIN_END = /([A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?(?:\.[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?)*)$/;
+
+  // Commands and sub-commands by the word typed (the user, 2026-10-26). A lookup maps every
+  // spelling, lower case -- the name and each of its "also" spellings -- to {doc, name as written}.
+  // A word names an entry when it is one of those spellings, ignoring case, or an abbreviation of one
+  // at least `abbreviate` long when the entry sets it (none does unless it says so: "-Jump can not be
+  // abbreviated at all"). An exact spelling wins; an abbreviation must fit only one entry.
+  function spellings(entries) {
+    var r = {};
+    if (entries) for (var k in entries) if (has(entries, k)) {
+      var d = entries[k];
+      r[k.toLowerCase()] = { doc: d, name: d._n || k };
+      var also = d.also || [];
+      for (var i = 0; i < also.length; i++) r[String(also[i]).toLowerCase()] = { doc: d, name: String(also[i]) };
+    }
+    return r;
+  }
+  function entryNamed(lookup, typed) {
+    var t = String(typed).toLowerCase(), found = null, k;
+    if (has(lookup, t)) return lookup[t];
+    for (k in lookup) if (has(lookup, k)) {
+      var e = lookup[k], n = e.doc.abbreviate;
+      if (!(n > 0) || t.length < n || k.indexOf(t) !== 0) continue;
+      if (found && found.doc !== e.doc) return null; // fits two entries
+      found = { doc: e.doc, name: e.doc._n || e.name };
+    }
+    return found;
+  }
+  // An entry's sub-commands, by spelling (kept on the entry), and as completion rows.
+  function subsOf(doc) {
+    if (!doc._subs) doc._subs = spellings(byLower(doc.subcommands));
+    return doc._subs;
+  }
+  function subRows(doc) {
+    var subs = subsOf(doc), rows = [];
+    for (var k in subs) if (has(subs, k)) {
+      var s = subs[k], row = { v: s.name, k: 'subcommand', sp: true };
+      if (s.doc.forms && s.doc.forms.length) for (var f = 0; f < s.doc.forms.length; f++) rows.push(extend(row, { doc: s.doc, form: s.doc.forms[f] }));
+      else rows.push(extend(row, { doc: s.doc }));
+    }
+    return rows;
+  }
+  var commandSpellings = null; // spellings(meta.commands), rebuilt when the metadata arrives
+
+  // ------------------------------------------------------------------------------------------
+  // The call being typed: which entry, which form, which argument
+  // ------------------------------------------------------------------------------------------
+  // For text before the caret: inside `name[` (a member, method or object) the innermost unclosed
+  // bracket; otherwise a documented command at the beginning. Returns {call, name, doc, form, index,
+  // argStart, token} or null. `index` counts commas (calls) or space-separated tokens (commands).
+  function callAt(text) {
+    var depth = 0, open = -1, inQuote = false;
+    for (var i = text.length - 1; i >= 0; i--) {
+      var ch = text.charAt(i);
+      if (ch === '"') inQuote = !inQuote;
+      if (inQuote) continue;
+      if (ch === ']') depth++;
+      else if (ch === '[') { if (depth === 0) { open = i; break; } depth--; }
+    }
+    if (open > 0) {
+      var nm = /([A-Za-z_][A-Za-z0-9_]*)$/.exec(text.slice(0, open));
+      if (nm) {
+        var nameStart = open - nm[1].length, before = text.charAt(nameStart - 1), doc = null, call = 'object';
+        if (before === '.' || before === ':') {
+          var ch2 = CHAIN_END.exec(text.slice(0, nameStart - 1));
+          var info = ch2 ? chainInfo(ch2[1]) : null;
+          call = before === '.' ? 'member' : 'method';
+          if (info && info.docs) doc = (before === '.' ? info.docs.members : info.docs.methods)[nm[1].toLowerCase()];
+        } else doc = meta.objects[nm[1].toLowerCase()];
+        var args = text.slice(open + 1), index = 0, last = 0, d2 = 0;
+        for (var j = 0; j < args.length; j++) {
+          var c2 = args.charAt(j);
+          if (c2 === '[') d2++; else if (c2 === ']') d2--; else if (c2 === ',' && d2 === 0) { index++; last = j + 1; }
+        }
+        return finishCall({ call: call, name: nm[1], doc: doc, index: index, argStart: open + 1 + last, token: args.slice(last) });
+      }
+    }
+    // A command at the beginning.
+    var b = beginningAt(text), head = text.slice(b), m = /^(\S+)(\s+)([\s\S]*)$/.exec(head);
+    if (!m) return null;
+    if (!commandSpellings) commandSpellings = spellings(meta.commands);
+    var hit = entryNamed(commandSpellings, m[1]);
+    if (!hit) return null;
+    var cdoc = hit.doc, name = hit.name, last = hit.name, rest = m[3], sm;
+    // Each complete word that names a sub-command goes a level down: oc !c -Jump <forwho>.
+    while (cdoc.subcommands && (sm = /^(\S+)(\s+)/.exec(rest))) {
+      var sub = entryNamed(subsOf(cdoc), sm[1]);
+      if (!sub) break;
+      cdoc = sub.doc; name += ' ' + sub.name; last = sub.name; rest = rest.slice(sm[0].length);
+    }
+    var toks = words(rest), ends = /\s$/.test(rest) || rest === '';
+    var idx = ends ? toks.length : toks.length - 1, tok = ends ? '' : (/(\S*)$/.exec(rest)[1]);
+    return finishCall({ call: 'command', name: name, last: last, doc: cdoc, index: idx, argStart: text.length - tok.length, token: tok });
+  }
+
+  // Picks the form: the one being filled in (placeholders), else the first whose parameters reach
+  // this far. The current parameter: a repeating last one covers everything after it.
+  function finishCall(c) {
+    if (!c.doc) return c;
+    var forms = c.doc.forms || [{}];
+    var f = ph && ph.form && ph.name === (c.last || c.name) && forms.indexOf(ph.form) >= 0 ? ph.form : null;
+    for (var i = 0; !f && i < forms.length; i++) {
+      var ps = forms[i].params || [];
+      if (ps.length > c.index || (ps.length && ps[ps.length - 1].repeat)) f = forms[i];
+    }
+    c.form = f || forms[0];
+    var all = c.form.params || [];
+    c.pindex = Math.min(c.index, all.length - 1);
+    c.param = all.length && (c.index < all.length || all[all.length - 1].repeat) ? all[c.pindex] : null;
+    return c;
+  }
+
+  // A parameter's own list (`values`, or a console list named by `source`), as entries.
+  var SOURCES = { files: 'files', scripts: 'scripts', types: 'types', events: 'events', commands: 'commands', objects: 'tlos' };
+  function paramEntries(p) {
+    if (p.values) return named(p.values, 'value');
+    if (p.source === 'variables') return variables();
+    if (p.source === 'aliases') return data.aliases.map(function (a) { return { v: a.n, k: 'alias', n: a.w }; });
+    if (SOURCES[p.source]) return named(data[SOURCES[p.source]] || [], p.source.replace(/s$/, ''));
+    return null;
+  }
+
+  // What the text before the caret asks for: {title, entries, token, from} for a name list,
+  // {history: tokens, from} for the history list, or null.
+  function contextAt(text) {
+    var b = beginningAt(text), head = text.slice(b), m;
+
+    var hq = historyQuery(head);
+    if (hq) return { history: hq, from: b };
+
+    // Inside an unclosed Event[ -- an event; inside an unclosed Script[ -- a running script.
+    if ((m = /Event\[([^\]]*)$/i.exec(text)))
+      return { title: 'events', entries: withForms(named(data.events, 'event'), meta.events), token: m[1], from: text.length - m[1].length, all: true };
+    if ((m = /Script\[([^\]]*)$/i.exec(text)))
+      return { title: 'running scripts', entries: named(data.scripts, 'script'), token: m[1], from: text.length - m[1].length, all: true };
+
+    // ext[ension] <name>: the extensions on disk; ext[ension] -unload <name>: the loaded ones (the
+    // user, 2026-10-26). LavishScript takes "ext" ... "extension" for the Extension command.
+    if ((m = /^ext(?:e(?:n(?:s(?:i(?:on?)?)?)?)?)?\s+(-unload\s+)?(\S*)$/i.exec(head))) {
+      var unload = !!m[1], exts = (data.extensions || []).filter(function (x) { return !unload || x.l; });
+      return { title: unload ? 'loaded extensions' : 'extensions',
+               entries: exts.map(function (x) { return { v: x.n, k: x.l ? 'loaded' : 'extension' }; }),
+               token: m[2], from: text.length - m[2].length, all: true };
+    }
+
+    // A documented parameter with its own list (values, or a source).
+    var c = callAt(text), pe = c && c.param ? paramEntries(c.param) : null;
+    // The first word after a command (or sub-command) that has sub-commands: those, plus whatever its
+    // own first parameter offers.
+    if (c && c.call === 'command' && c.index === 0 && c.doc.subcommands)
+      return { title: 'subcommands of ' + c.name + (pe ? ', or ' + c.param.name : ''), entries: subRows(c.doc).concat(pe || []),
+               token: c.token, from: c.argStart, all: true };
+    if (pe) return { title: c.param.name + ' of ' + c.name, entries: pe, token: c.token, from: c.argStart, all: true };
+
+    // Inside an unclosed ${: `chain.` / `chain:` -> members / methods; before any . [ : ( -> a
+    // top-level object or a variable.
+    var i = text.lastIndexOf('${');
+    if (i >= 0 && text.indexOf('}', i) < 0) {
+      var inner = text.slice(i + 2);
+      if ((m = CHAIN_SEP.exec(inner))) return memberContext(m[1], m[2], m[3], text.length - m[3].length);
+      if (/^[A-Za-z0-9_]*$/.test(inner))
+        return { title: 'objects and variables', entries: withForms(named(data.tlos, 'object'), meta.objects).concat(variables()),
+                 token: inner, from: i + 2, all: false };
+    }
+
+    // At the beginning.
+    if ((m = /^(declare|declarevariable)\s+\S+\s+(\S*)$/i.exec(head)))
+      return { title: 'types', entries: named(data.types, 'type'), token: m[2], from: text.length - m[2].length, all: true };
+    if ((m = /^lstype\s+(\S*)$/i.exec(head)))
+      return { title: 'types', entries: named(data.types, 'type'), token: m[1], from: text.length - m[1].length, all: true };
+    if ((m = /^(end|endscript)\s+(\S*)$/i.exec(head)))
+      return { title: 'running scripts', entries: named(data.scripts, 'script'), token: m[2], from: text.length - m[2].length, all: true };
+    if ((m = /^(run|runscript)\s+(\S*)$/i.exec(head)))
+      return { title: 'scripts', entries: named(data.files, 'file'), token: m[2], from: text.length - m[2].length, all: true };
+    if ((m = CHAIN_SEP.exec(head))) return memberContext(m[1], m[2], m[3], text.length - m[3].length);
+    if ((m = /^(\S+)$/.exec(head))) {
+      var e = [];
+      for (var k = 0; k < data.commands.length; k++) e.push({ v: data.commands[k], k: 'command', sp: true });
+      e = withForms(e, meta.commands);
+      for (var a = 0; a < data.aliases.length; a++) e.push({ v: data.aliases[a].n, k: 'alias', n: data.aliases[a].w, sp: true });
+      e = e.concat(variables(), withForms(named(data.tlos, 'object'), meta.objects));
+      return { title: 'commands, aliases, variables and objects', entries: e, token: m[1], from: b, all: false };
+    }
+    return null;
+  }
+
+  // The names matching the token, best first (the user's order, 2026-10-26):
+  //   0 starts with it, same case    1 starts with it, any case
+  //   2 contains it, same case       3 contains it, any case
+  // then shortest first, then alphabetical -- so for `La`, LavishScript comes before lavish.
+  // An empty token lists everything only where `all` says so (short lists).
+  function filterNames(ctx) {
+    var t = ctx.token, tl = t.toLowerCase(), found = [];
+    if (!t && !ctx.all) return [];
+    for (var i = 0; i < ctx.entries.length; i++) {
+      var e = ctx.entries[i], v = String(e.v), vl = v.toLowerCase(), tier;
+      if (!t || v.indexOf(t) === 0) tier = 0;
+      else if (vl.indexOf(tl) === 0) tier = 1;
+      else if (v.indexOf(t) > 0) tier = 2;
+      else if (vl.indexOf(tl) > 0) tier = 3;
+      else continue;
+      if (e.missing) tier += 4; // documented but not in this session: after every live one
+      found.push({ e: e, tier: tier, len: v.length, key: vl });
+    }
+    found.sort(function (a, b) {
+      return a.tier - b.tier || a.len - b.len || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+    });
+    return found.map(function (f) { return f.e; });
+  }
+
+  // ------------------------------------------------------------------------------------------
+  // The list
+  // ------------------------------------------------------------------------------------------
+
+  // value with every occurrence of every word wrapped in <mark>
+  function markedInto(el, value, tokens) {
+    var lower = value.toLowerCase(), hit = [];
+    for (var t = 0; t < tokens.length; t++) {
+      if (!tokens[t]) continue;
+      for (var p = lower.indexOf(tokens[t]); p >= 0; p = lower.indexOf(tokens[t], p + 1))
+        for (var k = p; k < p + tokens[t].length; k++) hit[k] = true;
+    }
+    var i = 0;
+    while (i < value.length) {
+      var j = i;
+      while (j < value.length && !!hit[j] === !!hit[i]) j++;
+      var piece = value.slice(i, j);
+      if (hit[i]) { var mk = document.createElement('mark'); mk.textContent = piece; el.appendChild(mk); }
+      else el.appendChild(document.createTextNode(piece));
+      i = j;
+    }
+  }
+
+  function hideAc() { ac.on = false; acBox.classList.remove('on'); }
+
+  // Recompute from the text before the caret. The best entry sits at the bottom, next to the
+  // input line, and is highlighted.
+  function updateAc() {
+    updateHint();
+    var full = input.value;
+    if (full === '') ac.suppressed = false;
+    if (ac.suppressed) { hideAc(); return; }
+    var caret = input.selectionStart == null ? full.length : input.selectionStart;
+    var text = full.slice(0, caret);
+    var ctx = contextAt(text);
+    if (!ctx) { hideAc(); return; }
+
+    var items = [], total = 0;
+    if (ctx.history) {
+      for (var i = history.length - 1; i >= 0; i--) {
+        if (!matchesAll(history[i], ctx.history) || (excludes.length && leftOut(history[i]))) continue;
+        total++;
+        if (items.length < HIST_MAX) items.push({ v: history[i], k: '' });
+      }
+      ac.history = true; ac.title = 'history'; ac.tokens = ctx.history; ac.token = ''; ac.to = full.length;
+    } else {
+      var found = filterNames(ctx);
+      if (excludes.length) found = found.filter(function (it) { return !leftOut(it.v); });
+      total = found.length;
+      items = found.slice(0, LIST_MAX);
+      if (!items.length) { hideAc(); return; }
+      ac.history = false; ac.title = ctx.title; ac.tokens = [ctx.token.toLowerCase()]; ac.token = ctx.token;
+      // A selected placeholder is replaced by what's accepted.
+      ac.to = input.selectionEnd > caret ? input.selectionEnd : caret;
+      if (ctx.chain) items = withMemberValues(ctx.chain, ctx.token, items);
+    }
+    if (excludes.length) items = items.map(dressed);
+    items.reverse(); // best last: next to the input line
+    ac.items = items; ac.total = total; ac.from = ctx.from; ac.sel = items.length - 1;
+    ac.on = true;
+    acBox.classList.add('on');
+    renderAc();
+    acList.scrollTop = acList.scrollHeight;
+  }
+
+  function renderAc() {
+    acHead.textContent = ac.title + ' · ' + (ac.total ? ac.total + (ac.total === 1 ? ' match' : ' matches') +
+      (ac.total > ac.items.length ? ' (' + ac.items.length + ' shown)' : '') : 'no matches');
+    var frag = document.createDocumentFragment();
+    for (var i = 0; i < ac.items.length; i++) {
+      var it = ac.items[i], row = document.createElement('div'), v = document.createElement('span');
+      v.className = 'v';
+      markedInto(v, String(it.d || it.v), ac.tokens); // d: shown instead (lsconsole2 exclude)
+      row.appendChild(v);
+      var sig = signature(it);
+      if (sig) { var sg = document.createElement('span'); sg.className = 'sig'; sg.textContent = sig; row.appendChild(sg); }
+      var n = document.createElement('span');
+      n.className = 'n';
+      if (it.val !== undefined) { n.textContent = '(' + it.val + ')'; n.className = 'n val'; }
+      else if (it.n) n.textContent = '→ ' + it.n;
+      row.appendChild(n);
+      if (it.k) {
+        var k = document.createElement('span');
+        k.className = 'k';
+        k.textContent = it.missing ? '⚠ not in this session' : it.k;
+        row.appendChild(k);
+      }
+      row.dataset.i = i;
+      row.className = (i === ac.sel ? 'sel' : '') + (it.missing ? ' missing' : '');
+      frag.appendChild(row);
+    }
+    acList.textContent = '';
+    acList.appendChild(frag);
+    renderDesc();
+  }
+
+  // The highlighted entry's description, under the list.
+  function renderDesc() {
+    var it = ac.items[ac.sel], text = '';
+    if (it) {
+      text = (it.form && it.form.description) || (it.doc && it.doc.description) || '';
+      if (it.doc && it.doc.deprecated) text += (text ? '  ' : '') + 'Deprecated: ' + it.doc.deprecated;
+    }
+    acDesc.textContent = '';
+    if (it && it.missing) {
+      var w = document.createElement('span');
+      w.className = 'warn';
+      w.textContent = '⚠ documented, but this session\'s type has no such member';
+      acDesc.appendChild(w);
+      if (text) acDesc.appendChild(document.createTextNode('  ' + text));
+    } else acDesc.textContent = text;
+    acDesc.classList.toggle('on', !!acDesc.textContent);
+  }
+
+  function moveSel(delta) {
+    if (!ac.items.length) return;
+    ac.sel = Math.max(0, Math.min(ac.items.length - 1, ac.sel + delta));
+    var rows = acList.children;
+    for (var i = 0; i < rows.length; i++)
+      rows[i].className = (i === ac.sel ? 'sel' : '') + (ac.items[i].missing ? ' missing' : '');
+    var r = rows[ac.sel];
+    if (r.offsetTop < acList.scrollTop) acList.scrollTop = r.offsetTop;
+    else if (r.offsetTop + r.offsetHeight > acList.scrollTop + acList.clientHeight)
+      acList.scrollTop = r.offsetTop + r.offsetHeight - acList.clientHeight;
+    renderDesc();
+  }
+
+  // ------------------------------------------------------------------------------------------
+  // Placeholders (the user's spec): accepting an entry with parameters inserts the whole call, a
+  // placeholder per parameter; Tab / Shift+Tab move between them; Esc removes the unfilled ones
+  // from the last filled one on (commas for calls, spaces for commands; empty [] goes too).
+  // ------------------------------------------------------------------------------------------
+  // ph: { call, name, form, segs: [{s, e, literal, filled}], open, close, idx, text }, positions in
+  // input.value; or null.
+  var ph = null;
+
+  function startPlaceholders(at, it, after) {
+    var ps = it.form.params, call = CALL_KINDS[it.k], name = String(it.v), segs = [];
+    var text = name + (call ? '[' : ' '), pos = at + text.length;
+    for (var i = 0; i < ps.length; i++) {
+      if (i) { text += call ? ',' : ' '; pos++; }
+      var label = ps[i].literal || paramLabel(ps[i], !call).replace(/^\[|\]$/g, '').replace(/\?$/, '');
+      segs.push({ s: pos, e: pos + label.length, literal: !!ps[i].literal, filled: false });
+      text += label; pos += label.length;
+    }
+    if (call) text += ']';
+    var full = input.value;
+    input.value = full.slice(0, at) + text + after;
+    ph = { call: !!call, name: name, form: it.form, segs: segs, open: call ? at + name.length : -1,
+           close: call ? at + text.length - 1 : -1, idx: -1, text: input.value };
+    phSelect(1);
+  }
+
+  // Selects the next (dir 1) or previous (-1) placeholder that isn't a literal; past the last one
+  // the session ends with the caret after the call.
+  function phSelect(dir) {
+    for (var i = ph.idx + dir; i >= 0 && i < ph.segs.length; i += dir) {
+      if (ph.segs[i].literal) continue;
+      ph.idx = i;
+      input.setSelectionRange(ph.segs[i].s, ph.segs[i].e);
+      updateHint();
+      return;
+    }
+    if (dir > 0) {
+      var end = ph.call ? ph.close + 1 : ph.segs[ph.segs.length - 1].e;
+      ph = null;
+      input.setSelectionRange(end, end);
+      updateHint();
+    }
+  }
+
+  // After any edit: the change must be inside one placeholder (which grows or shrinks and counts as
+  // filled); an edit anywhere else ends the session.
+  function phSync() {
+    if (!ph) return;
+    var a = ph.text, b = input.value;
+    if (a === b) return;
+    var p = 0, s = 0;
+    while (p < a.length && p < b.length && a.charAt(p) === b.charAt(p)) p++;
+    while (s < a.length - p && s < b.length - p && a.charAt(a.length - 1 - s) === b.charAt(b.length - 1 - s)) s++;
+    var oldEnd = a.length - s, delta = b.length - a.length, k = -1;
+    for (var i = 0; i < ph.segs.length; i++)
+      if (!ph.segs[i].literal && p >= ph.segs[i].s && oldEnd <= ph.segs[i].e) { k = i; break; }
+    if (k < 0) { ph = null; return; }
+    ph.segs[k].e += delta;
+    ph.segs[k].filled = true;
+    ph.idx = k;
+    for (var j = k + 1; j < ph.segs.length; j++) { ph.segs[j].s += delta; ph.segs[j].e += delta; }
+    if (ph.close >= 0) ph.close += delta;
+    ph.text = b;
+  }
+
+  function phEscape() {
+    var v = input.value, last = -1, i;
+    for (i = 0; i < ph.segs.length; i++) if (!ph.segs[i].literal && ph.segs[i].filled) last = i;
+    var keep = ph.segs.slice(0, last + 1), parts = [];
+    for (i = 0; i < keep.length; i++) parts.push(v.slice(keep[i].s, keep[i].e));
+    var from, to, mid;
+    if (ph.call) { from = ph.open; to = ph.close + 1; mid = parts.length ? '[' + parts.join(',') + ']' : ''; }
+    else { from = ph.segs[0].s - 1; to = ph.segs[ph.segs.length - 1].e; mid = parts.length ? ' ' + parts.join(' ') : ''; }
+    input.value = v.slice(0, from) + mid + v.slice(to);
+    var caret = from + mid.length;
+    ph = null;
+    input.setSelectionRange(caret, caret);
+  }
+
+  // Put the entry into the input line, replacing what it completes (not run). An entry with a
+  // documented form that takes parameters becomes the whole call, with placeholders. After a
+  // history entry the list stays away until the input is emptied or Alt+Enter, so an entry that
+  // itself starts with "hist" doesn't reopen it.
+  function acceptAc(i) {
+    if (i < 0 || i >= ac.items.length) return;
+    var full = input.value, it = ac.items[i], value = String(it.v);
+    if (!ac.history && it.form && it.form.params && it.form.params.length) {
+      ph = null;
+      startPlaceholders(ac.from, it, full.slice(ac.to));
+      hideAc();
+      updateAc();
+      return;
+    }
+    // Commands and aliases take a space after them; names (going on to . or :) don't.
+    var insert = value + (it.sp && full.charAt(ac.to) !== ' ' ? ' ' : '');
+    input.value = full.slice(0, ac.from) + insert + full.slice(ac.to);
+    var caret = ac.from + insert.length;
+    phSync(); // a value chosen for a placeholder fills it
+    input.setSelectionRange(caret, caret);
+    if (ac.history) { ac.suppressed = true; hideAc(); }
+    else updateAc();
+    if (ph) phSelect(1);
+  }
+
+  // ------------------------------------------------------------------------------------------
+  // The parameter hint, above the input line
+  // ------------------------------------------------------------------------------------------
+  function updateHint() {
+    var full = input.value, caret = input.selectionStart == null ? full.length : input.selectionStart;
+    var c = full ? callAt(full.slice(0, caret)) : null;
+    hintEl.textContent = '';
+    if (!c || !c.doc || !c.form) { hintEl.classList.remove('on'); return; }
+    var ps = c.form.params || [], call = c.call !== 'command';
+    hintEl.appendChild(document.createTextNode(c.name + (call ? '[' : ' ')));
+    for (var i = 0; i < ps.length; i++) {
+      if (i) hintEl.appendChild(document.createTextNode(call ? ', ' : ' '));
+      var label = paramLabel(ps[i], !call);
+      if (i === c.pindex && c.param) { var b = document.createElement('b'); b.textContent = label; hintEl.appendChild(b); }
+      else hintEl.appendChild(document.createTextNode(label));
+    }
+    if (call) hintEl.appendChild(document.createTextNode(']'));
+    if (c.form.returns) {
+      var r = document.createElement('span'); r.className = 'ret'; r.textContent = ' → ' + c.form.returns; hintEl.appendChild(r);
+    }
+    var about = c.param ? ((c.param.type ? c.param.type + ' ' : '') + (c.param.name || '') +
+      (c.param.description ? ': ' + c.param.description : '')) : (c.form.description || c.doc.description || '');
+    if (about) { var a = document.createElement('span'); a.className = 'about'; a.textContent = '    ' + about; hintEl.appendChild(a); }
+    hintEl.classList.add('on');
+  }
+
+  acList.addEventListener('mousedown', function (e) { e.preventDefault(); }); // keep the input focused
+  acList.addEventListener('click', function (e) {
+    var row = e.target.closest ? e.target.closest('#ac-list > div') : null;
+    if (row) acceptAc(+row.dataset.i);
+    input.focus();
+  });
+
+  // ------------------------------------------------------------------------------------------
+  // Messages in
+  // ------------------------------------------------------------------------------------------
+  window.lsc2 = {
+    rx: function (m) {
+      if (!m || !m.t) return;
+      if (m.t === 'reset') { out.textContent = ''; if (find.on) runFind(false); }
+      else if (m.t === 'lines') addLines(m.lines || []);
+      else if (m.t === 'focusInput') input.focus();
+      else if (m.t === 'paste') pasted(m.text);
+      else if (m.t === 'history') { history = (m.items || []).slice(); hpos = -1; if (ac.on) updateAc(); }
+      else if (m.t === 'histAdd') {
+        var at = history.indexOf(m.c);
+        if (at >= 0) history.splice(at, 1);
+        history.push(m.c);
+        if (ac.on) updateAc();
+      }
+      else if (m.t === 'ac') {
+        for (var k in m.data) if (Object.prototype.hasOwnProperty.call(m.data, k)) {
+          if (k === 'meta') {
+            meta = { commands: byLower(m.data.meta.commands), objects: byLower(m.data.meta.objects), events: byLower(m.data.meta.events) };
+            commandSpellings = null;
+          }
+          else data[k] = m.data[k] || [];
+        }
+        if (ac.on) updateAc();
+      }
+      else if (m.t === 'members') {
+        var docs = m.docs || {};
+        typeInfo[m.name] = { type: m.type || '', members: m.members || [], methods: m.methods || [], live: m.live !== false,
+                             docs: { members: byLower(docs.members), methods: byLower(docs.methods) }, at: Date.now() };
+        delete typeAsked[m.name];
+        if (document.activeElement === input) updateAc(); // the list may have been waiting for this
+      }
+      else if (m.t === 'forgetValues') { memberValues = {}; valuesAsked = {}; if (ac.on) updateAc(); }
+      else if (m.t === 'scopeVars') {
+        scopeVars[m.chain] = { names: m.names || [], at: Date.now() };
+        delete scopeAsked[m.chain];
+        if (document.activeElement === input) updateAc();
+      }
+      else if (m.t === 'exclude') {
+        excludes = (m.list || []).slice().sort(function (a, b) { return String(b.s).length - String(a.s).length; });
+        if (ac.on) updateAc();
+      }
+      else if (m.t === 'values') {
+        // values {name: text or null (not a basic type)} for chain.name
+        var now = Date.now();
+        for (var nm in m.values) if (Object.prototype.hasOwnProperty.call(m.values, nm)) {
+          memberValues[m.chain + '.' + nm] = { v: m.values[nm], at: now };
+          delete valuesAsked[m.chain + '.' + nm];
+        }
+        if (ac.on) updateAc();
+      }
+    }
+  };
+
+  // ------------------------------------------------------------------------------------------
+  // Brackets on the input line (the user, 2026-10-26)
+  // ------------------------------------------------------------------------------------------
+  // Typing ( [ or { adds its closer after the caret when the caret is at the end, before a space or
+  // before another closer; with a selection, it wraps the selection instead. Typing a closer that is
+  // already next steps over it when the line is balanced. Backspace between an empty pair removes
+  // both. Tab steps over the next closer. Only typing does this: pasting, completion and history
+  // set the line as they are.
+  // Highlighting, brackets only: the pair touching the caret (the bracket just before it, else the
+  // one just after) in yellow, the innermost pair around the caret in blue, unmatched ones in red.
+  var OPEN = { '(': ')', '[': ']', '{': '}' }, CLOSE = { ')': '(', ']': '[', '}': '{' };
+
+  // Each bracket's partner: pairs[i] = index, -1 when unmatched, -2 when v[i] isn't a bracket.
+  function bracketPairs(v) {
+    var pairs = [], stack = [];
+    for (var i = 0; i < v.length; i++) {
+      var c = v.charAt(i);
+      pairs.push(-2);
+      if (OPEN[c]) { stack.push(i); pairs[i] = -1; }
+      else if (CLOSE[c]) {
+        pairs[i] = -1;
+        if (stack.length && v.charAt(stack[stack.length - 1]) === CLOSE[c]) { var o = stack.pop(); pairs[o] = i; pairs[i] = o; }
+      }
+    }
+    return pairs;
+  }
+  function balanced(v) { return bracketPairs(v).indexOf(-1) < 0; }
+
+  // What one edit should become: b = {v, s, e} before it, v and s after it, ph whether parameter
+  // placeholders are active. Returns {v, s, e} to apply, or null to leave the edit alone.
+  function bracketEdit(b, v, s, ph) {
+    var removed = b.e - b.s;
+    // One character typed, replacing the selection if there was one.
+    if (v.length === b.v.length - removed + 1 && s === b.s + 1 &&
+        v.slice(0, b.s) === b.v.slice(0, b.s) && v.slice(s) === b.v.slice(b.e)) {
+      var c = v.charAt(b.s);
+      if (OPEN[c] && removed && !ph) {
+        var sel = b.v.slice(b.s, b.e);
+        return { v: b.v.slice(0, b.s) + c + sel + OPEN[c] + b.v.slice(b.e), s: b.s + 1, e: b.s + 1 + sel.length };
+      }
+      if (OPEN[c]) {
+        var next = v.charAt(s);
+        if (!next || /\s/.test(next) || CLOSE[next]) return { v: v.slice(0, s) + OPEN[c] + v.slice(s), s: s, e: s };
+      }
+      if (CLOSE[c] && !removed && b.v.charAt(b.s) === c && balanced(b.v)) return { v: b.v, s: s, e: s };
+      return null;
+    }
+    // Backspace between an empty pair.
+    if (!removed && s === b.s - 1 && v === b.v.slice(0, s) + b.v.slice(b.s) && OPEN[b.v.charAt(s)] &&
+        b.v.charAt(b.s) === OPEN[b.v.charAt(s)])
+      return { v: b.v.slice(0, s) + b.v.slice(b.s + 1), s: s, e: s };
+    return null;
+  }
+
+  // Index -> 'at' (touching the caret), 'in' (around it) or 'bad' (unmatched).
+  function bracketMarks(v, s, e) {
+    var pairs = bracketPairs(v), marks = {}, i;
+    for (i = 0; i < pairs.length; i++) if (pairs[i] === -1) marks[i] = 'bad';
+    if (s !== e) return marks;
+    var touch = s > 0 && pairs[s - 1] >= 0 ? s - 1 : (pairs[s] >= 0 ? s : -1);
+    for (i = s - 1; i >= 0; i--) // the innermost pair around the caret: open before it, close at or after it
+      if (pairs[i] >= s && OPEN[v.charAt(i)]) {
+        if (touch < 0 || (i !== touch && pairs[i] !== touch)) { marks[i] = marks[pairs[i]] = 'in'; }
+        break;
+      }
+    if (touch >= 0) marks[touch] = marks[pairs[touch]] = 'at';
+    return marks;
+  }
+
+  var before = { v: '', s: 0, e: 0 };
+  function remember() { before = { v: input.value, s: input.selectionStart, e: input.selectionEnd }; }
+  function afterTyping() {
+    var r = bracketEdit(before, input.value, input.selectionStart, !!ph);
+    if (!r) return;
+    input.value = r.v;
+    input.setSelectionRange(r.s, r.e);
+  }
+  // Tab with nothing else to do: step over the closer after the caret.
+  function stepOut() {
+    var s = input.selectionStart;
+    if (s !== input.selectionEnd || !CLOSE[input.value.charAt(s)]) return false;
+    input.setSelectionRange(s + 1, s + 1);
+    updateAc();
+    return true;
+  }
+
+  // The input's text is drawn by a mirror under it (the input's own text is transparent), so
+  // single characters can be coloured. Redrawn only when the text, caret or scroll changed.
+  var mirror = document.getElementById('mirror'), painted = '';
+  function paintInput() {
+    var v = input.value, s = input.selectionStart, e = input.selectionEnd, key = v + '\x00' + s + ',' + e + ',' + input.scrollLeft;
+    if (key !== painted) {
+      painted = key;
+      var marks = bracketMarks(v, s, e), frag = document.createDocumentFragment(), run = '';
+      for (var i = 0; i < v.length; i++) {
+        if (!marks[i]) { run += v.charAt(i); continue; }
+        if (run) { frag.appendChild(document.createTextNode(run)); run = ''; }
+        var sp = document.createElement('span');
+        sp.className = 'br-' + marks[i];
+        sp.textContent = v.charAt(i);
+        frag.appendChild(sp);
+      }
+      if (run) frag.appendChild(document.createTextNode(run));
+      mirror.textContent = '';
+      mirror.appendChild(frag);
+    }
+    mirror.scrollLeft = input.scrollLeft;
+  }
+  // Completion, history, placeholders and paste set the line in many places: while the input has
+  // focus, a cheap check catches them (nothing is redrawn unless something changed).
+  var paintTimer = 0;
+  function paintTick() { paintInput(); remember(); } // also keeps `before` current for typing that comes without a keydown
+  input.addEventListener('focus', function () { paintTick(); if (!paintTimer) paintTimer = setInterval(paintTick, 50); });
+  input.addEventListener('blur', function () { clearInterval(paintTimer); paintTimer = 0; paintInput(); });
+  input.addEventListener('keyup', paintInput);
+  input.addEventListener('mouseup', paintTick);
+  input.addEventListener('scroll', paintInput);
+
+  // ------------------------------------------------------------------------------------------
+  // Input line
+  // ------------------------------------------------------------------------------------------
+  function run() {
+    ph = null;
+    var text = input.value.trim();
+    if (text) send({ t: 'exec', text: text }); // the host records it and sends histAdd to every console
+    input.value = ''; hpos = -1; ac.suppressed = false; hideAc(); updateHint();
+    out.scrollTop = out.scrollHeight;
+  }
+
+  input.addEventListener('focus', function () { send({ t: 'focus' }); });
+  input.addEventListener('input', function () { afterTyping(); hpos = -1; phSync(); updateAc(); paintInput(); remember(); });
+  input.addEventListener('keyup', function (e) { var k = keyName(e); if (/^(Arrow|Home|End)/.test(k)) updateHint(); });
+  input.addEventListener('mouseup', updateHint);
+
+  input.addEventListener('keydown', function (e) {
+    remember(); // what the line was before this key, for afterTyping
+    var key = keyName(e);
+    if (ph && key === 'Escape') { phEscape(); hideAc(); updateHint(); e.preventDefault(); return; }
+    if (ph && key === 'Tab' && (!ac.on || e.shiftKey)) { phSelect(e.shiftKey ? -1 : 1); hideAc(); e.preventDefault(); return; }
+    if (ac.on) {
+      if (key === 'ArrowUp') { moveSel(-1); e.preventDefault(); return; }
+      if (key === 'ArrowDown') { moveSel(1); e.preventDefault(); return; }
+      if (key === 'PageUp') { moveSel(-10); e.preventDefault(); return; }
+      if (key === 'PageDown') { moveSel(10); e.preventDefault(); return; }
+      if (key === 'Tab') {
+        var cur = ac.items[ac.sel];
+        if (!ac.history && cur && String(cur.v).toLowerCase() === ac.token.toLowerCase() && stepOut()) { e.preventDefault(); return; }
+        acceptAc(ac.sel); e.preventDefault(); return;
+      }
+      if (key === 'Escape') { ac.suppressed = true; hideAc(); e.preventDefault(); return; }
+      if (key === 'Enter' && e.altKey) { e.preventDefault(); return; } // already showing
+      if (key === 'Enter') {
+        var it = ac.items[ac.sel];
+        // Already typed in full: run it rather than "complete" it to itself.
+        if (!ac.history && it && String(it.v).toLowerCase() === ac.token.toLowerCase()) { run(); e.preventDefault(); return; }
+        acceptAc(ac.sel); e.preventDefault(); return;
+      }
+    }
+    if (key === 'Tab') { stepOut(); e.preventDefault(); return; } // never leave the input line
+    if (key === 'Enter' && e.altKey) {
+      ac.suppressed = false; updateAc(); e.preventDefault();
+    } else if (key === 'Enter') {
+      run(); e.preventDefault();
+    } else if (key === 'Escape') {
+      input.value = ''; hpos = -1; updateAc(); e.preventDefault();
+    } else if (key === 'ArrowUp' && history.length) {
+      hpos = hpos < 0 ? history.length - 1 : Math.max(0, hpos - 1);
+      input.value = history[hpos]; e.preventDefault();
+    } else if (key === 'ArrowDown' && hpos >= 0) {
+      hpos++;
+      if (hpos >= history.length) { hpos = -1; input.value = ''; } else input.value = history[hpos];
+      e.preventDefault();
+    }
+  });
+
+  // ------------------------------------------------------------------------------------------
+  // Keyboard anywhere in the console
+  // ------------------------------------------------------------------------------------------
+  // The text box with focus (the input line or the find box), or null.
+  function focusedBox() {
+    var a = document.activeElement;
+    return a && a.tagName === 'INPUT' ? a : null;
+  }
+  function boxSelection(box) {
+    return box && box.selectionStart !== box.selectionEnd ? box.value.slice(box.selectionStart, box.selectionEnd) : '';
+  }
+  function edited(box) { if (box === input) updateAc(); else runFind(false); }
+
+  // Paste: the host reads the clipboard and sends it back ('paste'). One line goes in at the
+  // caret of the box that asked; more than one is refused (the user, 2026-10-26).
+  var pasteInto = null;
+  function pasted(text) {
+    var box = pasteInto || input;
+    pasteInto = null;
+    text = String(text || '').replace(/[\r\n]+$/, '');
+    if (/[\r\n]/.test(text)) {
+      note('Paste refused: ' + text.split(/\r\n|\r|\n/).length + ' lines. Paste one line at a time.');
+      return;
+    }
+    box.focus();
+    box.setRangeText(text, box.selectionStart, box.selectionEnd, 'end');
+    edited(box);
+  }
+
+  // ctrl+C copies what's selected (in the box with focus first, else in the output); ctrl+X does
+  // the same and removes it from the box; ctrl+V / Shift+Insert paste; ctrl+F opens find.
+  document.addEventListener('keydown', function (e) {
+    var key = keyName(e), box = focusedBox();
+    // Typing after clicking the output goes to the input line (the character follows the focus).
+    if (!e.ctrlKey && !e.altKey && !e.metaKey && key.length === 1 && !box) {
+      input.focus();
+      return;
+    }
+    if (e.shiftKey && !e.ctrlKey && key === 'Insert') { pasteInto = box || input; send({ t: 'paste' }); e.preventDefault(); return; }
+    if (!e.ctrlKey || e.altKey || e.metaKey) return;
+    var k = key.toLowerCase();
+    if (k === 'f') { openFind(); e.preventDefault(); return; }
+    if (k === 'v') { pasteInto = box || input; send({ t: 'paste' }); e.preventDefault(); return; }
+    if (k !== 'c' && k !== 'x') return;
+    var fromBox = boxSelection(box);
+    var text = fromBox || String(window.getSelection() || '');
+    if (text) send({ t: 'copy', text: text });
+    if (k === 'x' && fromBox) { box.setRangeText('', box.selectionStart, box.selectionEnd, 'start'); edited(box); }
+    e.preventDefault();
+  }, true);
+
+  // Right-click copies the selection (or the clicked line).
+  out.addEventListener('contextmenu', function (e) {
+    e.preventDefault();
+    var text = String(window.getSelection() || '');
+    if (!text) {
+      var el = e.target.closest ? e.target.closest('#out > div') : null;
+      if (el) text = el.textContent;
+    }
+    if (text) send({ t: 'copy', text: text });
+  });
+
+  send({ t: 'ready' });
+})();
+</script>
+</body>
+</html>

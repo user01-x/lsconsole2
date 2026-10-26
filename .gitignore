@@ -1,0 +1,11 @@
+# Ultralight SDK: fetched by tools/fetch-ultralight.ps1, never committed (its licence covers
+# shipping the runtime with a product, not republishing the SDK).
+third_party/ultralight/
+third_party/*.7z
+
+# Build output
+build/
+dist/
+.vs/
+*.user
+*.aps

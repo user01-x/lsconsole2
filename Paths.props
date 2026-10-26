@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Where the two SDKs live. Override either on the command line (/p:ISXDKDir=...) or with an
+     environment variable of the same name. -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <ISXDKDir Condition="'$(ISXDKDir)'==''">D:\Sync\ClaudeProjects\Lavish-sdk-dist\ISXDK\35</ISXDKDir>
+    <UltralightDir Condition="'$(UltralightDir)'==''">$(MSBuildThisFileDirectory)third_party\ultralight</UltralightDir>
+    <LSConsole2Out>$(MSBuildThisFileDirectory)build\$(Platform)\$(Configuration)\</LSConsole2Out>
+  </PropertyGroup>
+</Project>
