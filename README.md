@@ -11,8 +11,7 @@ lets you search the output.
 It works in game sessions and in the uplink, with or without other extensions loaded. It needs no
 network access and no account.
 
-<!-- GIF: completion of a member chain with live values, e.g. ${Me.Na -> Name (Stormfall) -->
-![Completing a member chain](docs/media/completion.gif)
+![Completion with live values, parameter hints and bracket matching](docs/media/completion.gif)
 
 ---
 
@@ -53,8 +52,9 @@ network access and no account.
 - **Exclusions.** `lsconsole2 exclude <text> [<replacement>]` keeps text out of completions, for
   example your character's name while recording a video.
 
-<!-- GIF: history search with hist + filter words -->
-![Searching history](docs/media/history.gif)
+It also searches the console output: **Ctrl+F** highlights every match and steps through them.
+
+![Searching the console output with Ctrl+F](docs/media/find.gif)
 
 ---
 
@@ -152,9 +152,6 @@ Where completion looks:
 
 Entries the metadata documents but the session doesn't have (for example from an extension that
 isn't loaded) are shown greyed out with a warning sign.
-
-<!-- GIF: method completion with placeholders, Tab between parameters, Esc to drop the rest -->
-![Parameter placeholders](docs/media/placeholders.gif)
 
 ### Parameters
 
