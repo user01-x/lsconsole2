@@ -57,9 +57,14 @@ bool g_started = false;
 bool g_pageReady = false;
 ULONGLONG g_lastFlush = 0;
 
-// The console bind, while we hold it.
+// Standing in for `console`.
 fLSCommand g_stockConsole = nullptr; // InnerSpace's `console`, while ours stands in for it
 bool g_runtimeFailed = false;        // the runtime couldn't be unpacked: `console` stays stock
+
+// What this session ran since the extension loaded, oldest first, no duplicates: the page's Up/Down
+// list (the user, 2026-10-27). `hist` searches the host's shared history instead.
+constexpr size_t kSessionHistMax = 1000;
+std::vector<std::string> g_sessionHist;
 
 void AddLine(std::string s)
 {
@@ -576,6 +581,7 @@ void OnPulse(){
 			}
 			hostlink::Send({{"t", "toPage"}, {"m", {{"t", "reset"}}}});
 			SendExcludes();
+			hostlink::Send({{"t", "toPage"}, {"m", {{"t", "sessionHistory"}, {"items", g_sessionHist}}}});
 			// ...and every autocomplete list.
 			g_acSent.clear();
 			g_lastAc = 0;
@@ -586,6 +592,10 @@ void OnPulse(){
 		{
 			std::string text = m.value("text", "");
 			if (text.empty()) continue;
+			// This session's Up/Down list (the page keeps the same; this copy outlives a page reload).
+			g_sessionHist.erase(std::remove(g_sessionHist.begin(), g_sessionHist.end(), text), g_sessionHist.end());
+			g_sessionHist.push_back(text);
+			if (g_sessionHist.size() > kSessionHistMax) g_sessionHist.erase(g_sessionHist.begin());
 			// `consoleclear` typed here, the whole line in any case, clears this console instead of
 			// going to InnerSpace's command of that name (the user, 2026-10-26: "just hijack it").
 			{

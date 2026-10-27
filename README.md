@@ -35,8 +35,8 @@ network access and no account.
 - **Parameter hints.** For entries the console has metadata for, it shows a description, each form's
   parameters and what it returns. Accepting a completion fills in parameter placeholders, which
   you step through with Tab.
-- **Command history.** History is saved, shared between all your sessions, and searchable: type
-  `hist` followed by filter words.
+- **Command history.** Up / Down recall what this session ran. Everything every session runs is
+  also saved and shared, and searchable: type `hist` followed by filter words.
 - **Search the output** with Ctrl+F, using match case, regex, whole word, or "show only matching
   lines".
 - **Copy and paste** with Ctrl+C / Ctrl+X / Ctrl+V, from the input line or the output. A paste of
@@ -97,8 +97,8 @@ It also searches the console output: **Ctrl+F** highlights every match and steps
 ### Running commands
 
 Type a command and press **Enter**. Anything you could type in the stock console works here, and its
-output appears in both consoles. **Up / Down** on an empty list step through your history.
-**Esc** clears the input line.
+output appears in both consoles. **Up / Down** on an empty list step through the commands this
+session has run since LSConsole2 loaded, stopping at the oldest. **Esc** clears the input line.
 
 Each command you run is echoed with the time you entered it. `consoleclear` typed by itself clears
 LSConsole2's output.
@@ -159,7 +159,8 @@ The hint above the input line shows the form you are in and its return type.
 
 ### History
 
-Every command you run is saved, and all sessions on the PC share the same history.
+Every command you run is saved, and all sessions on the PC share the same history, which `hist`
+searches. **Up / Down** stay local: they only recall what this session ran since LSConsole2 loaded.
 
 - `hist` (or `histo`, … `history`) as the first word lists your history, newest next to the input
   line.

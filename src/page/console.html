@@ -151,8 +151,9 @@
   var HIST_MAX = 200;   // history matches listed
   var LIST_MAX = 100;   // other matches listed
 
-  var history = [];     // oldest first, no duplicates; the host's, shared by every session
-  var hpos = -1;        // Up/Down recall position when no list is shown
+  var history = [];     // oldest first, no duplicates; the host's, shared by every session (hist)
+  var sessionHist = []; // oldest first, no duplicates: what this session ran since the extension loaded (Up/Down)
+  var hpos = -1;        // Up/Down recall position in sessionHist when no list is shown
   var data = { types: [], tlos: [], events: [], commands: [], aliases: [], scripts: [], files: [], variables: [] };
   // The open list: entries {v: value, k: kind, n: note}, the range of the input it replaces,
   // what was typed there, and whether it's the history list.
@@ -1143,6 +1144,7 @@
       else if (m.t === 'focusInput') input.focus();
       else if (m.t === 'paste') pasted(m.text);
       else if (m.t === 'history') { history = (m.items || []).slice(); hpos = -1; if (ac.on) updateAc(); }
+      else if (m.t === 'sessionHistory') { sessionHist = (m.items || []).slice(); hpos = -1; }
       else if (m.t === 'histAdd') {
         var at = history.indexOf(m.c);
         if (at >= 0) history.splice(at, 1);
@@ -1309,10 +1311,34 @@
   // ------------------------------------------------------------------------------------------
   // Input line
   // ------------------------------------------------------------------------------------------
+  // Up/Down recall (the user, 2026-10-27): only this session's commands since the extension loaded,
+  // newest first, stopping at the oldest; `hist` still searches everyone's. A repeated command moves
+  // to the newest end, as in the shared history. The extension keeps the same list and resends it
+  // on "ready", so a page reload or host restart doesn't lose it.
+  function sessionAdd(list, text) {
+    var at = list.indexOf(text);
+    if (at >= 0) list.splice(at, 1);
+    list.push(text);
+    if (list.length > 1000) list.shift(); // the extension's kSessionHistMax
+  }
+  // One step from position `pos` (-1: not recalling): {pos, value}, or null when there's nothing to do.
+  function recallStep(list, pos, dir) {
+    if (dir < 0) {
+      if (!list.length) return null;
+      var p = pos < 0 ? list.length - 1 : Math.max(0, pos - 1);
+      return { pos: p, value: list[p] };
+    }
+    if (pos < 0) return null;
+    return pos + 1 >= list.length ? { pos: -1, value: '' } : { pos: pos + 1, value: list[pos + 1] };
+  }
+
   function run() {
     ph = null;
     var text = input.value.trim();
-    if (text) send({ t: 'exec', text: text }); // the host records it and sends histAdd to every console
+    if (text) {
+      send({ t: 'exec', text: text }); // the host records it and sends histAdd to every console
+      sessionAdd(sessionHist, text);
+    }
     input.value = ''; hpos = -1; ac.suppressed = false; hideAc(); updateHint();
     out.scrollTop = out.scrollHeight;
   }
@@ -1353,13 +1379,9 @@
       run(); e.preventDefault();
     } else if (key === 'Escape') {
       input.value = ''; hpos = -1; updateAc(); e.preventDefault();
-    } else if (key === 'ArrowUp' && history.length) {
-      hpos = hpos < 0 ? history.length - 1 : Math.max(0, hpos - 1);
-      input.value = history[hpos]; e.preventDefault();
-    } else if (key === 'ArrowDown' && hpos >= 0) {
-      hpos++;
-      if (hpos >= history.length) { hpos = -1; input.value = ''; } else input.value = history[hpos];
-      e.preventDefault();
+    } else if (key === 'ArrowUp' || key === 'ArrowDown') {
+      var step = recallStep(sessionHist, hpos, key === 'ArrowUp' ? -1 : 1);
+      if (step) { hpos = step.pos; input.value = step.value; e.preventDefault(); }
     }
   });
 
