@@ -26,6 +26,20 @@ std::mutex g_sizeMu;
 uint32_t g_w = 800, g_h = 300;
 double g_scale = 1.0;
 
+// Giving up (the user, 2026-10-27). A host that can't start, or keeps dying soon after it starts,
+// would leave the session with no console at all, so after kMaxFailures in a row the session goes
+// back to the stock console. A failure is a launch that never connected, or a connection that
+// ended within kStableMs; a connection that lasts kStableMs resets the count.
+constexpr int kMaxFailures = 3;
+constexpr ULONGLONG kStableMs = 30000;
+int g_failures = 0;
+bool g_launchPending = false; // launched, not yet connected
+
+void GiveUp(const std::string &why)
+{
+	PostToMain({{"t", "_fallback"}, {"text", why}});
+}
+
 bool Stopping(DWORD waitMs)
 {
 	return WaitForSingleObject(g_stopEv, waitMs) == WAIT_OBJECT_0;
@@ -54,8 +68,10 @@ void LaunchHost()
 	if (!ok)
 	{
 		PostToMain({{"t", "_log"}, {"text", "could not start LSConsole2Host.exe (error " + std::to_string(GetLastError()) + ")"}});
+		g_failures++;
 		return;
 	}
+	g_launchPending = true;
 	CloseHandle(pi.hThread);
 	CloseHandle(pi.hProcess);
 }
@@ -78,6 +94,12 @@ HANDLE OpenPipe()
 		if (e == ERROR_PIPE_BUSY) { WaitNamedPipeW(name.c_str(), 1000); if (Stopping(0)) return INVALID_HANDLE_VALUE; continue; }
 		if (e == ERROR_FILE_NOT_FOUND && GetTickCount64() - lastLaunch > 10000)
 		{
+			if (g_launchPending) { g_failures++; g_launchPending = false; } // the last launch never answered
+			if (g_failures >= kMaxFailures)
+			{
+				GiveUp("the console's render host failed to start " + std::to_string(g_failures) + " times in a row");
+				return INVALID_HANDLE_VALUE;
+			}
 			LaunchHost();
 			lastLaunch = GetTickCount64();
 		}
@@ -96,7 +118,7 @@ void Run()
 		g_hostExe = runtime::Unpack(error);
 		if (g_hostExe.empty())
 		{
-			PostToMain({{"t", "_runtimeFailed"}, {"text", error}});
+			GiveUp("the console's runtime could not be unpacked (" + error + ")");
 			return;
 		}
 		lsc2::RuntimeId() = runtime::Id();
@@ -115,6 +137,8 @@ void Run()
 			                 {"w", g_w}, {"h", g_h}, {"scale", g_scale}}.dump(-1, ' ', false, json::error_handler_t::replace));
 		}
 		g_connected = true;
+		g_launchPending = false;
+		ULONGLONG connectedAt = GetTickCount64();
 		clk.unlock();
 		overlay::OnLinkUp();
 
@@ -128,6 +152,12 @@ void Run()
 		overlay::OnLinkDown();
 		PostToMain({{"t", "_down"}}); // the page is gone until the next "ready"
 		if (w == WAIT_OBJECT_0) break;
+		if (GetTickCount64() - connectedAt >= kStableMs) g_failures = 0;
+		else if (++g_failures >= kMaxFailures)
+		{
+			GiveUp("the console's render host stopped " + std::to_string(g_failures) + " times within 30 seconds of starting");
+			break;
+		}
 		if (Stopping(1000)) break; // the host went away: give a restart a moment
 	}
 }

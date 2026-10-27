@@ -27,6 +27,10 @@ network access and no account.
   - the variables visible from the console;
   - script names (`.iss`) after `run`, inside `Script[...]` and after `end`.
   - extensions after `ext` (all of them) and `ext -unload` (the loaded ones).
+- **A coloured input line.** Commands, `${...}`, objects, variables and strings each have a colour,
+  and an unknown command, object or member is underlined in red before you press Enter.
+- **Suggestions from history.** As you type, the newest matching command you've run is shown greyed
+  after the caret; Right arrow or End takes it.
 - **Brackets.** Typing `(`, `[` or `{` adds the closer, and the pair at the caret and the pair
   around it are highlighted, so `${Math.Calc[` becomes `${Math.Calc[]}` with the caret inside.
 - **Live values.** Variables and members of basic types (string, int, float, bool…) show their
@@ -39,6 +43,8 @@ network access and no account.
   also saved and shared, and searchable: type `hist` followed by filter words.
 - **Search the output** with Ctrl+F, using match case, regex, whole word, or "show only matching
   lines".
+- **Quieter output.** A line repeated back to back is shown once with a count (`×12`). Scrolled up,
+  a **Back to current** button shows how many lines have arrived and jumps to the newest.
 - **Copy and paste** with Ctrl+C / Ctrl+X / Ctrl+V, from the input line or the output. A paste of
   several lines is refused instead of running them.
 - **A real window, always on top.** The console is a see-through window owned by the game window,
@@ -102,6 +108,17 @@ session has run since LSConsole2 loaded, stopping at the oldest. **Esc** clears 
 
 Each command you run is echoed with the time you entered it. `consoleclear` typed by itself clears
 LSConsole2's output.
+
+### The input line
+
+- **Colours:** the command (purple), a `relay`'s target (orange), `${` and `}` (teal), the object or
+  variable a data sequence starts with (blue), and strings (green).
+- **Red, wavy underline:** a command no command or alias starts like, an object or variable that
+  doesn't exist, or a member or method the type doesn't have. The word you're typing is never
+  marked, and a member is only judged when the console knows its type.
+- **Suggestion:** with the caret at the end of the line, the newest command that starts with what
+  you've typed (this session's first, then everyone's) is shown greyed after it. **Right arrow** or
+  **End** takes it; keep typing to ignore it.
 
 ### Brackets
 
@@ -187,11 +204,20 @@ searches. **Up / Down** stay local: they only recall what this session ran since
 | **Alt+F** | show only the matching lines |
 | **Esc** | close find |
 
+### Output
+
+- A line identical to the one before it isn't repeated: the first shows a count, as in `×12`.
+- When you scroll up and new lines keep arriving, the output stays where you are, and a **Back to
+  current** button shows how many have arrived. Click it to jump to the newest line; it goes away
+  once you're at the bottom.
+
 ### Copy and paste
 
 - Click the console to give it the keyboard, and click the game to give it back.
 - **Ctrl+C** copies the selection, from the input line or the output. **Ctrl+X** also cuts it from
-  the input line. **Right-click** on the output copies the selection, or the clicked line.
+  the input line.
+- **Right-click** on the output opens a menu: **Copy** (when something is selected) and **Copy all**
+  (every line the console holds, without colour codes).
 - **Ctrl+V** and **Shift+Insert** paste a single line. Text with several lines is refused with a
   message, so a stray paste never runs a block of commands.
 
@@ -391,6 +417,9 @@ folder.
 ## Notes
 
 - **Elevation.** Sessions running as administrator and sessions that aren't can share one host.
+- **If the console can't run.** If its render host fails to start, or stops within 30 seconds of
+  starting, three times in a row, LSConsole2 gives `console` back to the stock console with a red
+  message. Reload the extension to try again.
 - **Other consoles.** The stock console keeps working, and output appears in both.
 - **Ogre and other UI extensions.** LSConsole2 doesn't depend on them or interact with them, and
   they can be loaded before or after it.

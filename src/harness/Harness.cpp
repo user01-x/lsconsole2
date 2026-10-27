@@ -315,17 +315,56 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int)
 			RECT r;
 			GetWindowRect(game, &r);
 			Log(SaveRegion(r, shot + L"-6.bmp") ? "screenshot 6 saved" : "screenshot 6 FAILED");
+			// Repeated lines collapse into one with a count; a suggestion from this session's history
+			// (the first step ran "echo hello from the harness") shows greyed after the caret.
+			for (int i = 0; i < 3; i++) SendVk(VK_ESCAPE, 0x1B);
+			Lines({"repeat me", "repeat me", "repeat me", "repeat me"});
+			for (wchar_t ch : std::wstring(L"echo hel")) SendChar(ch);
+			step = 15;
+		}
+		else if (step == 15 && t > 10200)
+		{
+			RECT r;
+			GetWindowRect(game, &r);
+			Log(SaveRegion(r, shot + L"-7.bmp") ? "screenshot 7 saved" : "screenshot 7 FAILED");
+			// Scrolled up, new lines arrive: the "Back to current" button counts them.
+			SendVk(VK_ESCAPE, 0x1B);
+			SendVk(VK_ESCAPE, 0x1B);
+			hostlink::Send({{"t", "mouse"}, {"e", "move"}, {"x", 300}, {"y", 80}, {"b", 0}});
+			hostlink::Send({{"t", "wheel"}, {"dx", 0}, {"dy", 600}}); // up, as a real wheel notch away is +96
+			step = 151;
+		}
+		else if (step == 151 && t > 10700)
+		{
+			Lines({"new line A", "new line B", "new line C"}); // after the scroll has landed
+			step = 16;
+		}
+		else if (step == 16 && t > 11200)
+		{
+			RECT r;
+			GetWindowRect(game, &r);
+			Log(SaveRegion(r, shot + L"-8.bmp") ? "screenshot 8 saved" : "screenshot 8 FAILED");
+			// Right-click on the output: the menu (Copy all; no Copy without a selection).
+			hostlink::Send({{"t", "mouse"}, {"e", "down"}, {"x", 300}, {"y", 80}, {"b", 3}});
+			hostlink::Send({{"t", "mouse"}, {"e", "up"}, {"x", 300}, {"y", 80}, {"b", 3}});
+			step = 17;
+		}
+		else if (step == 17 && t > 11800)
+		{
+			RECT r;
+			GetWindowRect(game, &r);
+			Log(SaveRegion(r, shot + L"-9.bmp") ? "screenshot 9 saved" : "screenshot 9 FAILED");
 			// The console key, delivered to our window, must close the console rather than type.
 			if (HWND ov = FindWindowW(L"LSConsole2Overlay", nullptr))
 				PostMessageW(ov, WM_KEYDOWN, VK_OEM_3, 1 | (MapVirtualKeyW(VK_OEM_3, MAPVK_VK_TO_VSC) << 16));
 			step = 3;
 		}
-		else if (step == 3 && t > 10100)
+		else if (step == 3 && t > 12500)
 		{
 			Log("after console key: " + overlay::Status());
 			step = 4;
 		}
-		else if (step == 4 || t > 15000) break;
+		else if (step == 4 || t > 20000) break;
 		Sleep(10);
 	}
 

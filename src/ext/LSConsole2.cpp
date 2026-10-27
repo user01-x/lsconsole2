@@ -59,7 +59,7 @@ ULONGLONG g_lastFlush = 0;
 
 // Standing in for `console`.
 fLSCommand g_stockConsole = nullptr; // InnerSpace's `console`, while ours stands in for it
-bool g_runtimeFailed = false;        // the runtime couldn't be unpacked: `console` stays stock
+bool g_fellBack = false;             // no host could run (HostLink gave up): `console` is stock again
 
 // What this session ran since the extension loaded, oldest first, no duplicates: the page's Up/Down
 // list (the user, 2026-10-27). `hist` searches the host's shared history instead.
@@ -99,8 +99,8 @@ std::string Quote(const std::string &s)
 
 bool EnsureStarted()
 {
+	if (g_fellBack) return false;
 	if (g_started) return true;
-	if (g_runtimeFailed) return false;
 	meta::Load(); // built-ins, published, directory (Metadata.cpp)
 	overlay::Start(); // first: the frame event and the window size must exist before "hello"
 	overlay::SetToggleKey(Parse("${Input.Bind[console].Combo}"));
@@ -627,12 +627,13 @@ void OnPulse(){
 		else if (t == "values" && m.contains("names") && m["names"].is_array()) SendValues(m.value("chain", ""), m["names"]);
 		else if (t == "scopeVars") SendScopeVars(m.value("chain", ""));
 		else if (t == "_log") Say("%s", m.value("text", "").c_str());
-		else if (t == "_runtimeFailed")
+		else if (t == "_fallback")
 		{
-			// No host can run, so give the stock console back rather than leave none.
-			g_runtimeFailed = true;
+			// No host can run, so give the stock console back rather than leave none. Reloading the
+			// extension tries again.
+			g_fellBack = true;
 			overlay::Hide();
-			Say("\arthe console's runtime could not be unpacked (%s); the stock console stays in use", m.value("text", "").c_str());
+			Say("\ar%s; the stock console is back (reload LSConsole2 to try again)", m.value("text", "").c_str());
 			if (g_stockConsole) Exec("console -stock on");
 		}
 		else if (t == "_down") g_pageReady = false;

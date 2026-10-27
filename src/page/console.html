@@ -54,7 +54,20 @@
     background: var(--bg); border: 2px solid var(--edge);
     font: 13px/1.35 Consolas, "Cascadia Mono", monospace; color: var(--fg);
   }
-  #out { flex: 1; overflow-y: auto; padding: 6px 10px; white-space: pre-wrap; word-break: break-word; }
+  #outwrap { flex: 1; position: relative; min-height: 0; }
+  #out { position: absolute; left: 0; top: 0; right: 0; bottom: 0; overflow-y: auto; padding: 6px 10px;
+         white-space: pre-wrap; word-break: break-word; }
+  #out .rep { color: var(--dim); margin-left: 8px; -webkit-user-select: none; user-select: none; } /* ×N: a repeated line */
+  /* Scrolled up: how many lines arrived since, and the way back down */
+  #jump { display: none; position: absolute; right: 16px; bottom: 8px; padding: 3px 10px; border-radius: 10px;
+          border: 1px solid var(--edge); background: var(--ac-bg); color: var(--fg); font: inherit; font-size: 12px; cursor: pointer; }
+  #jump.on { display: block; }
+  /* Right-click on the output */
+  #menu { display: none; position: absolute; z-index: 10; min-width: 120px; padding: 3px 0; border: 1px solid var(--edge);
+          background: var(--ac-bg); color: var(--fg); font-size: 12px; }
+  #menu.on { display: block; }
+  #menu div { padding: 3px 12px; cursor: default; }
+  #menu div:hover { background: var(--sel); }
   #out div { min-height: 1.35em; }
   #out .echo { color: var(--echo); }
   ::selection { background: var(--sel); }
@@ -113,6 +126,14 @@
   #mirror .br-at { color: #11141a; background: #e5c07b; border-radius: 2px; }
   #mirror .br-in { color: #11141a; background: #61afef; border-radius: 2px; }
   #mirror .br-bad { color: #e06c75; text-decoration: underline; }
+  /* the input line's words: command, relay target, object or variable, ${ }, string, unknown, suggestion */
+  #mirror .tk-cmd { color: #c678dd; }
+  #mirror .tk-target { color: #d19a66; }
+  #mirror .tk-obj { color: #61afef; }
+  #mirror .tk-ds { color: #56b6c2; }
+  #mirror .tk-str { color: #98c379; }
+  #mirror .tk-bad { color: #e06c75; text-decoration-line: underline; text-decoration-style: wavy; text-decoration-color: #e06c75; }
+  #mirror .ghost { color: var(--dim); }
   #out .time { color: var(--dim); }
   /* LavishScript colour codes: \a + letter */
   .c-r { color: #e06c75; } .c-g { color: #98c379; } .c-y { color: #e5c07b; } .c-o { color: #d19a66; }
@@ -122,7 +143,8 @@
 </head>
 <body>
 <div id="root">
-  <div id="out"></div>
+  <div id="outwrap"><div id="out"></div><button id="jump"></button></div>
+  <div id="menu"><div data-act="copy">Copy</div><div data-act="all">Copy all</div></div>
   <div id="find">
     <input id="find-q" spellcheck="false" autocomplete="off" placeholder="find">
     <button id="find-case" title="Match case (Alt+C)">Aa</button>
@@ -225,26 +247,52 @@
       }
       pos += s.length;
     }
+    if (d._count > 1) { var rep = document.createElement('span'); rep.className = 'rep'; rep.textContent = '\u00d7' + d._count; d.appendChild(rep); }
     d._marked = !!(ranges && ranges.length);
   }
 
   function lineEl(text) {
     var d = document.createElement('div');
+    d._raw = text;
+    d._count = 1;
     d._p = parseLine(text);
     if (d._p.cls) d.className = d._p.cls;
     fillLine(d, find.on ? find.match(d._p.plain) : null, -1);
     return d;
   }
 
+  // A line identical to the one before it (colour codes and all) isn't added again: the earlier
+  // one counts it, shown as "×N" (the user, 2026-10-27).
   function addLines(lines) {
     var stick = atBottom();
-    var frag = document.createDocumentFragment();
-    for (var i = 0; i < lines.length; i++) frag.appendChild(lineEl(lines[i]));
+    var frag = document.createDocumentFragment(), prev = out.lastChild;
+    for (var i = 0; i < lines.length; i++) {
+      if (prev && prev._raw === lines[i]) {
+        prev._count++;
+        fillLine(prev, find.on ? find.match(prev._p.plain) : null, -1);
+        continue;
+      }
+      prev = lineEl(lines[i]);
+      frag.appendChild(prev);
+    }
     out.appendChild(frag);
     while (out.childNodes.length > MAX_DOM) out.removeChild(out.firstChild);
     if (find.on) findSoon();
     if (stick) out.scrollTop = out.scrollHeight;
+    else { unseen += lines.length; showJump(); }
   }
+
+  // Scrolled up: "Back to current" (with how many lines arrived since) jumps to the newest line
+  // (the user, 2026-10-27). Gone again at the bottom.
+  var jump = document.getElementById('jump'), unseen = 0;
+  function showJump() {
+    if (atBottom()) { unseen = 0; jump.classList.remove('on'); return; }
+    jump.textContent = '\u2193 ' + (unseen ? unseen + (unseen === 1 ? ' new line \u00b7 ' : ' new lines \u00b7 ') : '') + 'Back to current';
+    jump.classList.add('on');
+  }
+  out.addEventListener('scroll', showJump);
+  jump.addEventListener('mousedown', function (e) { e.preventDefault(); }); // keep the focus where it is
+  jump.addEventListener('click', function () { out.scrollTop = out.scrollHeight; showJump(); });
 
   // A line of the console's own (a rejected paste, ...): red, page only.
   function note(text) { addLines(['\x02' + text]); out.scrollTop = out.scrollHeight; }
@@ -1159,6 +1207,7 @@
           }
           else data[k] = m.data[k] || [];
         }
+        painted = '';
         if (ac.on) updateAc();
       }
       else if (m.t === 'members') {
@@ -1166,6 +1215,7 @@
         typeInfo[m.name] = { type: m.type || '', members: m.members || [], methods: m.methods || [], live: m.live !== false,
                              docs: { members: byLower(docs.members), methods: byLower(docs.methods) }, at: Date.now() };
         delete typeAsked[m.name];
+        painted = ''; // the input's colours may change with it
         if (document.activeElement === input) updateAc(); // the list may have been waiting for this
       }
       else if (m.t === 'forgetValues') { memberValues = {}; valuesAsked = {}; if (ac.on) updateAc(); }
@@ -1276,23 +1326,146 @@
     return true;
   }
 
+  // ------------------------------------------------------------------------------------------
+  // The input line's colours and the suggestion from history (the user, 2026-10-27)
+  // ------------------------------------------------------------------------------------------
+  // Colours: the command (red when no command or alias starts like that -- LavishScript takes
+  // abbreviations), a relay's target, ${ and its }, the object or variable a chain starts with, each
+  // member or method after it that the type is known not to have (red), and strings. The word at the
+  // caret is never red: it's still being typed. Nothing is red until the lists have arrived.
+  // A chain is only followed as far as every step is known, so nothing is asked about a name that
+  // doesn't exist (asking prints an error in the console).
+  function knownCommand(w) {
+    var l = w.toLowerCase(), i;
+    if (l.length >= 4 && 'history'.indexOf(l) === 0) return true; // the console's own `hist`
+    for (i = 0; i < data.commands.length; i++) if (String(data.commands[i]).toLowerCase().indexOf(l) === 0) return true;
+    for (i = 0; i < data.aliases.length; i++) if (String(data.aliases[i].n).toLowerCase() === l) return true;
+    return false;
+  }
+  function knownRoot(name) {
+    var l = name.toLowerCase(), i, vs = variables();
+    for (i = 0; i < data.tlos.length; i++) if (String(data.tlos[i]).toLowerCase() === l) return true;
+    for (i = 0; i < data.types.length; i++) if (String(data.types[i]).toLowerCase() === l) return true; // type-named objects
+    for (i = 0; i < vs.length; i++) if (String(vs[i].v).toLowerCase() === l) return true;
+    return false;
+  }
+  function hasName(list, name) {
+    var l = name.toLowerCase();
+    for (var i = 0; i < list.length; i++) if (String(list[i]).toLowerCase() === l) return true;
+    return false;
+  }
+
+  // One class per character ('' for none).
+  function lineClasses(v, caret) {
+    var cls = [], i;
+    for (i = 0; i < v.length; i++) cls.push('');
+    function mark(a, b, c) { for (var k = a; k < b && k < v.length; k++) cls[k] = c; }
+    function typing(a, b) { return caret >= a && caret <= b; }
+    var lists = data.commands.length > 0, objects = data.tlos.length > 0;
+
+    // A chain starting at `at`: Name[args].Name:Name ... -- colours what it can check.
+    function chain(at) {
+      var m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(v.slice(at));
+      if (!m) return;
+      var rootOk = knownRoot(m[0]);
+      mark(at, at + m[0].length, rootOk || typing(at, at + m[0].length) || !objects ? 'tk-obj' : 'tk-bad');
+      if (!rootOk) return;
+      var pos = at + m[0].length, info = chainInfo(m[0]);
+      for (;;) {
+        if (v.charAt(pos) === '[') { // arguments: skip to the matching ]
+          var depth = 0, j = pos;
+          for (; j < v.length; j++) { var c = v.charAt(j); if (c === '[') depth++; else if (c === ']' && --depth === 0) break; }
+          if (j >= v.length) return;
+          pos = j + 1;
+          info = chainInfo(v.slice(at, pos));
+        }
+        var sep = v.charAt(pos);
+        if (sep !== '.' && sep !== ':') return;
+        var n = /^[A-Za-z_][A-Za-z0-9_]*/.exec(v.slice(pos + 1));
+        if (!n) return;
+        var a = pos + 1, b = a + n[0].length;
+        if (!info || !info.live) return; // can't check this one, nor anything after it
+        var ok = hasName(sep === '.' ? info.members : info.methods, n[0]);
+        if (!ok && !typing(a, b)) { mark(a, b, 'tk-bad'); return; }
+        if (!ok || sep === ':') return; // a method ends what can be followed
+        pos = b;
+        info = chainInfo(v.slice(at, pos));
+      }
+    }
+
+    // relay <target>, then the command (or a chain) at the beginning.
+    var b0 = beginningAt(v);
+    if (b0 > 0) {
+      var rm = /^(\s*)(\S+)(\s+)("[^"]*"|\S+)/.exec(v);
+      if (rm) {
+        var r0 = rm[1].length, t0 = r0 + rm[2].length + rm[3].length;
+        mark(r0, r0 + rm[2].length, 'tk-cmd');
+        mark(t0, t0 + rm[4].length, 'tk-target');
+      }
+    }
+    var fw = /^\S+/.exec(v.slice(b0));
+    if (fw && fw[0].charAt(0) !== '$' && fw[0].charAt(0) !== '"') {
+      if (/[.:\[]/.test(fw[0])) chain(b0);
+      else mark(b0, b0 + fw[0].length, knownCommand(fw[0]) || typing(b0, b0 + fw[0].length) || !lists ? 'tk-cmd' : 'tk-bad');
+    }
+
+    // Strings, then ${...} on top (a data sequence inside a string is still evaluated).
+    for (i = 0; i < v.length; i++) {
+      if (v.charAt(i) !== '"') continue;
+      var e = v.indexOf('"', i + 1);
+      if (e < 0) e = v.length - 1;
+      mark(i, e + 1, 'tk-str');
+      i = e;
+    }
+    var pairs = bracketPairs(v);
+    for (i = 0; i + 1 < v.length; i++) {
+      if (v.charAt(i) !== '$' || v.charAt(i + 1) !== '{') continue;
+      mark(i, i + 2, 'tk-ds');
+      if (pairs[i + 1] >= 0) cls[pairs[i + 1]] = 'tk-ds';
+      var close = pairs[i + 1] >= 0 ? pairs[i + 1] : v.length; // inside ${...}: not the string's colour
+      for (var k = i + 2; k < close; k++) if (cls[k] === 'tk-str') cls[k] = '';
+      chain(i + 2);
+    }
+    return cls;
+  }
+
+  // The suggestion: with the caret at the end of the line, the newest command that starts with what's
+  // typed -- this session's first, then everyone's -- greyed after the caret. Right arrow or End takes
+  // it.
+  function suggestion(v) {
+    if (!v.trim() || historyQuery(v)) return '';
+    var lists = [sessionHist, history];
+    for (var l = 0; l < lists.length; l++)
+      for (var i = lists[l].length - 1; i >= 0; i--) {
+        var h = String(lists[l][i]);
+        if (h.length > v.length && h.indexOf(v) === 0) return h.slice(v.length);
+      }
+    return '';
+  }
+  function ghostNow() {
+    var v = input.value, s = input.selectionStart;
+    if (ph || document.activeElement !== input || s !== input.selectionEnd || s !== v.length) return '';
+    return suggestion(v);
+  }
+
   // The input's text is drawn by a mirror under it (the input's own text is transparent), so
-  // single characters can be coloured. Redrawn only when the text, caret or scroll changed.
+  // single characters can be coloured. Redrawn only when the text, caret or scroll changed, or the
+  // lists the colours check against did (`painted` is cleared when they arrive).
   var mirror = document.getElementById('mirror'), painted = '';
   function paintInput() {
-    var v = input.value, s = input.selectionStart, e = input.selectionEnd, key = v + '\x00' + s + ',' + e + ',' + input.scrollLeft;
+    var v = input.value, s = input.selectionStart, e = input.selectionEnd, ghost = ghostNow();
+    var key = v + '\x00' + s + ',' + e + ',' + input.scrollLeft + '\x00' + ghost;
     if (key !== painted) {
       painted = key;
-      var marks = bracketMarks(v, s, e), frag = document.createDocumentFragment(), run = '';
-      for (var i = 0; i < v.length; i++) {
-        if (!marks[i]) { run += v.charAt(i); continue; }
-        if (run) { frag.appendChild(document.createTextNode(run)); run = ''; }
-        var sp = document.createElement('span');
-        sp.className = 'br-' + marks[i];
-        sp.textContent = v.charAt(i);
-        frag.appendChild(sp);
+      var marks = bracketMarks(v, s, e), cls = lineClasses(v, s), frag = document.createDocumentFragment();
+      for (var i = 0; i < v.length; ) { // runs of one class; brackets' marks win
+        var c = marks[i] ? 'br-' + marks[i] : cls[i], j = i + 1;
+        while (j < v.length && !marks[j] && !marks[i] && cls[j] === c) j++;
+        if (c) { var sp = document.createElement('span'); sp.className = c; sp.textContent = v.slice(i, j); frag.appendChild(sp); }
+        else frag.appendChild(document.createTextNode(v.slice(i, j)));
+        i = j;
       }
-      if (run) frag.appendChild(document.createTextNode(run));
+      if (ghost) { var g = document.createElement('span'); g.className = 'ghost'; g.textContent = ghost; frag.appendChild(g); }
       mirror.textContent = '';
       mirror.appendChild(frag);
     }
@@ -1351,6 +1524,14 @@
   input.addEventListener('keydown', function (e) {
     remember(); // what the line was before this key, for afterTyping
     var key = keyName(e);
+    if ((key === 'ArrowRight' || key === 'End') && !e.shiftKey && !e.ctrlKey) {
+      var ghost = ghostNow();
+      if (ghost) {
+        input.value += ghost;
+        input.setSelectionRange(input.value.length, input.value.length);
+        hpos = -1; updateAc(); paintInput(); e.preventDefault(); return;
+      }
+    }
     if (ph && key === 'Escape') { phEscape(); hideAc(); updateHint(); e.preventDefault(); return; }
     if (ph && key === 'Tab' && (!ac.on || e.shiftKey)) { phSelect(e.shiftKey ? -1 : 1); hideAc(); e.preventDefault(); return; }
     if (ac.on) {
@@ -1436,16 +1617,41 @@
     e.preventDefault();
   }, true);
 
-  // Right-click copies the selection (or the clicked line).
-  out.addEventListener('contextmenu', function (e) {
+  // Right-click on the output: Copy (when something is selected) and Copy all (the user,
+  // 2026-10-27). Copy all is every line the console holds, repeated lines written out each time,
+  // without colour codes.
+  var menu = document.getElementById('menu'), menuSel = '';
+  function hideMenu() { menu.classList.remove('on'); }
+  function allText() {
+    var lines = [];
+    for (var d = out.firstChild; d; d = d.nextSibling)
+      for (var n = 0; n < (d._count || 1); n++) lines.push(d._p ? d._p.plain : d.textContent);
+    return lines.join('\n');
+  }
+  // Opened on the right button's release: the page's renderer doesn't send `contextmenu`.
+  out.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  out.addEventListener('mousedown', function (e) { if (e.button === 2) e.preventDefault(); }); // keep the selection
+  out.addEventListener('mouseup', function (e) {
+    if (e.button !== 2) return;
     e.preventDefault();
-    var text = String(window.getSelection() || '');
-    if (!text) {
-      var el = e.target.closest ? e.target.closest('#out > div') : null;
-      if (el) text = el.textContent;
-    }
-    if (text) send({ t: 'copy', text: text });
+    menuSel = String(window.getSelection() || '');
+    menu.querySelector('[data-act="copy"]').style.display = menuSel ? '' : 'none';
+    menu.classList.add('on');
+    var root = document.getElementById('root').getBoundingClientRect();
+    var x = Math.min(e.clientX, root.right - menu.offsetWidth - 4), y = Math.min(e.clientY, root.bottom - menu.offsetHeight - 4);
+    menu.style.left = Math.max(0, x - root.left) + 'px';
+    menu.style.top = Math.max(0, y - root.top) + 'px';
   });
+  menu.addEventListener('mousedown', function (e) { e.preventDefault(); }); // keep the selection
+  menu.addEventListener('click', function (e) {
+    var act = e.target.getAttribute && e.target.getAttribute('data-act');
+    if (act === 'copy' && menuSel) send({ t: 'copy', text: menuSel });
+    if (act === 'all') send({ t: 'copy', text: allText() });
+    hideMenu();
+  });
+  document.addEventListener('mousedown', function (e) { if (!menu.contains(e.target)) hideMenu(); }, true);
+  document.addEventListener('keydown', function (e) { if (keyName(e) === 'Escape') hideMenu(); }, true);
+  out.addEventListener('scroll', hideMenu);
 
   send({ t: 'ready' });
 })();
