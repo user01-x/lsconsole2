@@ -263,8 +263,19 @@
 
   // A line identical to the one before it (colour codes and all) isn't added again: the earlier
   // one counts it, shown as "×N" (the user, 2026-10-27).
+  // Scrolled up, what you're reading stays where it is (the user, 2026-10-27): the first line in view
+  // is noted before lines are added or the oldest trimmed, and put back at the same height after.
+  // While scrolled up, the oldest lines are only trimmed past twice the usual limit, so the ones
+  // being read aren't taken away; following the newest, the usual limit applies.
+  function firstLineInView() {
+    var top = out.scrollTop;
+    for (var d = out.firstChild; d; d = d.nextSibling)
+      if (d.offsetHeight && d.offsetTop + d.offsetHeight > top) return d; // hidden (filtered) lines have no height
+    return null;
+  }
   function addLines(lines) {
     var stick = atBottom();
+    var anchor = stick ? null : firstLineInView(), anchorAt = anchor ? anchor.offsetTop - out.scrollTop : 0;
     var frag = document.createDocumentFragment(), prev = out.lastChild;
     for (var i = 0; i < lines.length; i++) {
       if (prev && prev._raw === lines[i]) {
@@ -276,10 +287,16 @@
       frag.appendChild(prev);
     }
     out.appendChild(frag);
-    while (out.childNodes.length > MAX_DOM) out.removeChild(out.firstChild);
+    var keep = stick ? MAX_DOM : MAX_DOM * 2;
+    while (out.childNodes.length > keep) out.removeChild(out.firstChild);
     if (find.on) findSoon();
     if (stick) out.scrollTop = out.scrollHeight;
-    else { unseen += lines.length; showJump(); }
+    else {
+      // The line that was first in view, back at the same height; if it was trimmed away, the oldest left.
+      out.scrollTop = anchor && anchor.parentNode === out ? anchor.offsetTop - anchorAt : 0;
+      unseen += lines.length;
+      showJump();
+    }
   }
 
   // Scrolled up: "Back to current" (with how many lines arrived since) jumps to the newest line

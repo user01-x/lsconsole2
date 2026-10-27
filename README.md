@@ -207,9 +207,11 @@ searches. **Up / Down** stay local: they only recall what this session ran since
 ### Output
 
 - A line identical to the one before it isn't repeated: the first shows a count, as in `×12`.
-- When you scroll up and new lines keep arriving, the output stays where you are, and a **Back to
-  current** button shows how many have arrived. Click it to jump to the newest line; it goes away
-  once you're at the bottom.
+- When you scroll up and new lines keep arriving, the lines you're reading stay exactly where they
+  are, and scrolling carries on from them. A **Back to current** button shows how many lines have
+  arrived; click it to jump to the newest. It goes away once you're at the bottom.
+- The console holds the newest 5,000 lines, and up to 10,000 while you're scrolled up, so older
+  lines aren't taken away while you read them.
 
 ### Copy and paste
 

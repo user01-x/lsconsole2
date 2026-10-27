@@ -354,17 +354,60 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int)
 			RECT r;
 			GetWindowRect(game, &r);
 			Log(SaveRegion(r, shot + L"-9.bmp") ? "screenshot 9 saved" : "screenshot 9 FAILED");
+			// Scrolled up, the view holds still while lines arrive, even past the page's limit when the
+			// oldest are trimmed: back to the bottom, fill the page, scroll up, then two big batches.
+			SendVk(VK_ESCAPE, 0x1B); // closes the menu
+			hostlink::Send({{"t", "wheel"}, {"dx", 0}, {"dy", -100000}});
+			step = 18;
+		}
+		else if (step == 18 && t > 12300)
+		{
+			std::vector<std::string> bulk;
+			for (int i = 1; i <= 6000; i++) bulk.push_back("bulk line " + std::to_string(i));
+			Lines(bulk);
+			step = 19;
+		}
+		else if (step == 19 && t > 13000)
+		{
+			hostlink::Send({{"t", "wheel"}, {"dx", 0}, {"dy", 600}});
+			step = 20;
+		}
+		else if (step == 20 && t > 13600)
+		{
+			RECT r;
+			GetWindowRect(game, &r);
+			Log(SaveRegion(r, shot + L"-10.bmp") ? "screenshot 10 saved" : "screenshot 10 FAILED");
+			std::vector<std::string> more;
+			for (int i = 1; i <= 3000; i++) more.push_back("more line " + std::to_string(i));
+			Lines(more); // 8000 in the page: nothing trimmed yet
+			step = 21;
+		}
+		else if (step == 21 && t > 14300)
+		{
+			RECT r;
+			GetWindowRect(game, &r);
+			Log(SaveRegion(r, shot + L"-11.bmp") ? "screenshot 11 saved" : "screenshot 11 FAILED");
+			std::vector<std::string> more;
+			for (int i = 1; i <= 4000; i++) more.push_back("later line " + std::to_string(i));
+			Lines(more); // 12000: the oldest 2000 are trimmed, above what's in view
+			step = 22;
+		}
+		else if (step == 22 && t > 15100)
+		{
+			RECT r;
+			GetWindowRect(game, &r);
+			Log(SaveRegion(r, shot + L"-12.bmp") ? "screenshot 12 saved" : "screenshot 12 FAILED");
 			// The console key, delivered to our window, must close the console rather than type.
 			if (HWND ov = FindWindowW(L"LSConsole2Overlay", nullptr))
 				PostMessageW(ov, WM_KEYDOWN, VK_OEM_3, 1 | (MapVirtualKeyW(VK_OEM_3, MAPVK_VK_TO_VSC) << 16));
 			step = 3;
 		}
-		else if (step == 3 && t > 12500)
+		else if (step == 3 && t > 15800)
 		{
 			Log("after console key: " + overlay::Status());
 			step = 4;
 		}
-		else if (step == 4 || t > 20000) break;
+		else if (step == 4 || t > 24000) break;
 		Sleep(10);
 	}
 
