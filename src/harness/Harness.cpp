@@ -397,17 +397,35 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE, LPSTR, int)
 			RECT r;
 			GetWindowRect(game, &r);
 			Log(SaveRegion(r, shot + L"-12.bmp") ? "screenshot 12 saved" : "screenshot 12 FAILED");
-			// The console key, delivered to our window, must close the console rather than type.
-			if (HWND ov = FindWindowW(L"LSConsole2Overlay", nullptr))
-				PostMessageW(ov, WM_KEYDOWN, VK_OEM_3, 1 | (MapVirtualKeyW(VK_OEM_3, MAPVK_VK_TO_VSC) << 16));
-			step = 3;
+			// The caret: the input line focused with a few characters, sampled 8 times over about a
+			// second (it blinks), saved as -caret0..7.
+			hostlink::Send({{"t", "mouse"}, {"e", "down"}, {"x", 300}, {"y", 245}, {"b", 1}});
+			hostlink::Send({{"t", "mouse"}, {"e", "up"}, {"x", 300}, {"y", 245}, {"b", 1}});
+			for (wchar_t ch : std::wstring(L"echo")) SendChar(ch);
+			step = 23;
 		}
-		else if (step == 3 && t > 15800)
+		else if (step >= 23 && step < 31 && t > 15700 + (ULONGLONG)(step - 23) * 140)
+		{
+			RECT r;
+			GetWindowRect(game, &r);
+			RECT line = {r.left, r.top + 225, r.left + 300, r.top + 262}; // the input line
+			SaveRegion(line, shot + L"-caret" + std::to_wstring(step - 23) + L".bmp");
+			step++;
+			if (step == 31)
+			{
+				Log("caret frames saved");
+				// The console key, delivered to our window, must close the console rather than type.
+				if (HWND ov = FindWindowW(L"LSConsole2Overlay", nullptr))
+					PostMessageW(ov, WM_KEYDOWN, VK_OEM_3, 1 | (MapVirtualKeyW(VK_OEM_3, MAPVK_VK_TO_VSC) << 16));
+				step = 3;
+			}
+		}
+		else if (step == 3 && t > 17200)
 		{
 			Log("after console key: " + overlay::Status());
 			step = 4;
 		}
-		else if (step == 4 || t > 24000) break;
+		else if (step == 4 || t > 26000) break;
 		Sleep(10);
 	}
 

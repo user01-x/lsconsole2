@@ -11,6 +11,7 @@
 #include "Metadata.h"
 #include "../common/Protocol.h"
 #include <algorithm>
+#include <array>
 #include <cstdarg>
 #include <deque>
 #include <mutex>
@@ -19,6 +20,7 @@
 #include <regex>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #pragma comment(lib, "isxdk.lib")
@@ -101,7 +103,7 @@ bool EnsureStarted()
 {
 	if (g_fellBack) return false;
 	if (g_started) return true;
-	meta::Load(); // built-ins, published, directory (Metadata.cpp)
+	meta::Load(); // built-ins, extensions' files, yours (Metadata.cpp)
 	overlay::Start(); // first: the frame event and the window size must exist before "hello"
 	overlay::SetToggleKey(Parse("${Input.Bind[console].Combo}"));
 	std::string session = Parse("${Session}");
@@ -259,6 +261,187 @@ void Exclude(int argc, char *argv[])
 	SendExcludes();
 	if (with.is_null()) Say("completions containing \"%s\" are left out, and so are value previews containing it", text.c_str());
 	else Say("\"%s\" is shown as \"%s\" in completions", text.c_str(), with.get<std::string>().c_str());
+}
+
+// ---------------------------------------------------------------------------------------------
+// lsconsole2 watch (the user, 2026-10-27): a console line each time a watched event fires, with
+// its arguments. An event target is handed only the arguments, not the event, so each watched
+// event gets a callback of its own from a fixed pool, and the slot says which event it is. A name
+// with * or ? (ignoring case) matches every registered event it fits, when the command runs; an
+// event registered later isn't picked up until the command is run again.
+//   lsconsole2 watch <event or pattern>            watch it
+//   lsconsole2 watch -remove <event or pattern>    stop watching (matched against what's watched)
+//   lsconsole2 watch -list                         what's watched, and how often each fired
+//   lsconsole2 watch -clear                        stop watching everything
+// It lasts until the extension unloads, which detaches every callback.
+// ---------------------------------------------------------------------------------------------
+constexpr size_t kWatchSlots = 256;
+constexpr size_t kWatchArgsMax = 900; // characters of arguments on a line
+struct Watched
+{
+	std::string name; // empty: a free slot
+	unsigned int id = 0;
+	uint64_t fired = 0;
+};
+Watched g_watch[kWatchSlots];
+bool g_inWatch = false; // printing a watch line: an event it raises prints nothing
+
+void Fired(size_t slot, int argc, char *argv[])
+{
+	Watched &w = g_watch[slot];
+	if (w.name.empty()) return;
+	w.fired++;
+	if (g_inWatch) return;
+	std::string args;
+	for (int i = 0; i < argc; i++)
+	{
+		if (i) args += ' ';
+		args += Quote(argv[i] ? argv[i] : "");
+	}
+	if (args.size() > kWatchArgsMax) args = args.substr(0, kWatchArgsMax - 3) + "...";
+	g_inWatch = true;
+	pISInterface->Printf("\ay[event]\ax %s: %s", w.name.c_str(), args.c_str());
+	g_inWatch = false;
+}
+
+template <size_t N> void __cdecl WatchTarget(int argc, char *argv[], PLSOBJECT) { Fired(N, argc, argv); }
+template <size_t... I> std::array<fLSEventTarget, sizeof...(I)> WatchTargets(std::index_sequence<I...>)
+{
+	return {&WatchTarget<I>...};
+}
+const std::array<fLSEventTarget, kWatchSlots> kWatchTargets = WatchTargets(std::make_index_sequence<kWatchSlots>{});
+
+bool IsPattern(const std::string &s) { return s.find_first_of("*?") != std::string::npos; }
+
+// `pat` (* any run, ? any one character) against all of `s`, ignoring case.
+bool Glob(const char *pat, const char *s)
+{
+	const char *star = nullptr, *resume = nullptr;
+	while (*s)
+	{
+		if (*pat == '*') { star = pat++; resume = s; }
+		else if (*pat == '?' || (*pat && tolower((unsigned char)*pat) == tolower((unsigned char)*s))) { pat++; s++; }
+		else if (star) { pat = star + 1; s = ++resume; }
+		else return false;
+	}
+	while (*pat == '*') pat++;
+	return !*pat;
+}
+
+bool Matches(const std::string &what, const std::string &name)
+{
+	return IsPattern(what) ? Glob(what.c_str(), name.c_str()) : !_stricmp(what.c_str(), name.c_str());
+}
+
+std::vector<std::string> RegisteredEvents()
+{
+	std::vector<std::string> names;
+	for (auto &e : ReadList("Events"))
+		if (e.is_string()) names.push_back(e.get<std::string>());
+	return names;
+}
+
+// "a, b, c" -- at most 8 names, then how many more.
+std::string NameList(const std::vector<std::string> &names)
+{
+	std::string out;
+	for (size_t i = 0; i < names.size() && i < 8; i++) out += (i ? ", " : "") + names[i];
+	if (names.size() > 8) out += " and " + std::to_string(names.size() - 8) + " more";
+	return out;
+}
+
+void Unwatch(Watched &w)
+{
+	pISInterface->DetachEventTarget(w.id, kWatchTargets[&w - g_watch]);
+	w = Watched();
+}
+
+void UnwatchAll()
+{
+	for (auto &w : g_watch)
+		if (!w.name.empty()) Unwatch(w);
+}
+
+void WatchAdd(const std::string &what)
+{
+	if (IsPattern(what) && what.find_first_not_of("*?") == std::string::npos)
+	{
+		Say("\arwatch: \"%s\" would match every event; narrow it, e.g. EQ2_onIncoming*", what.c_str());
+		return;
+	}
+	std::vector<std::string> names;
+	for (auto &e : RegisteredEvents())
+		if (Matches(what, e)) names.push_back(e);
+	if (names.empty())
+	{
+		Say(IsPattern(what) ? "watch: no registered event matches \"%s\"" : "watch: no event named \"%s\" is registered", what.c_str());
+		return;
+	}
+	std::vector<std::string> already, failed;
+	size_t full = 0;
+	for (auto &name : names)
+	{
+		auto watched = std::find_if(std::begin(g_watch), std::end(g_watch), [&](const Watched &w) { return !_stricmp(w.name.c_str(), name.c_str()); });
+		if (watched != std::end(g_watch)) { already.push_back(name); continue; }
+		auto slot = std::find_if(std::begin(g_watch), std::end(g_watch), [](const Watched &w) { return w.name.empty(); });
+		if (slot == std::end(g_watch)) { full++; continue; }
+		unsigned int id = pISInterface->RegisterEvent(name.c_str()); // the existing event's ID
+		if (!id || !pISInterface->AttachEventTarget(id, kWatchTargets[slot - g_watch])) { failed.push_back(name); continue; }
+		slot->name = name;
+		slot->id = id;
+	}
+	size_t n = names.size() - already.size() - failed.size() - full;
+	if (n) Say("watching %zu event%s%s%s", n, n == 1 ? "" : "s", n == names.size() ? ": " : "", n == names.size() ? NameList(names).c_str() : "");
+	if (!already.empty()) Say("already watching %s", NameList(already).c_str());
+	if (!failed.empty()) Say("\arwatch: couldn't attach to %s", NameList(failed).c_str());
+	if (full) Say("\arwatch: %zu not watched: all %zu watch slots are in use (lsconsole2 watch -remove)", full, kWatchSlots);
+}
+
+void WatchRemove(const std::string &what)
+{
+	std::vector<std::string> removed;
+	for (auto &w : g_watch)
+		if (!w.name.empty() && Matches(what, w.name))
+		{
+			removed.push_back(w.name);
+			Unwatch(w);
+		}
+	if (removed.empty()) Say("watch: not watching anything matching \"%s\"", what.c_str());
+	else Say("stopped watching %s", NameList(removed).c_str());
+}
+
+void WatchList()
+{
+	std::vector<std::string> live = RegisteredEvents();
+	size_t n = 0;
+	for (auto &w : g_watch)
+	{
+		if (w.name.empty()) continue;
+		n++;
+		bool gone = std::none_of(live.begin(), live.end(), [&](const std::string &e) { return !_stricmp(e.c_str(), w.name.c_str()); });
+		Say("%s: fired %llu time%s%s", w.name.c_str(), (unsigned long long)w.fired, w.fired == 1 ? "" : "s",
+		    gone ? " \ar(no longer registered)\ax" : "");
+	}
+	if (!n) Say("not watching any events: lsconsole2 watch <event or pattern>");
+}
+
+void Watch(int argc, char *argv[])
+{
+	const char *what = argc > 2 ? argv[2] : "";
+	if (!*what || !_stricmp(what, "-list")) WatchList();
+	else if (!_stricmp(what, "-clear"))
+	{
+		size_t n = std::count_if(std::begin(g_watch), std::end(g_watch), [](const Watched &w) { return !w.name.empty(); });
+		UnwatchAll();
+		Say("stopped watching %zu event%s", n, n == 1 ? "" : "s");
+	}
+	else if (!_stricmp(what, "-remove"))
+	{
+		if (argc < 4) Say("lsconsole2 watch -remove <event or pattern>");
+		else WatchRemove(argv[3]);
+	}
+	else if (*what == '-') Say("lsconsole2 watch <event or pattern> | -remove <event or pattern> | -list | -clear");
+	else WatchAdd(what);
 }
 
 // Extensions for `ext[ension] <name>` and `ext[ension] -unload <name>` (the user, 2026-10-26):
@@ -817,6 +1000,7 @@ int __cdecl CMD_LSConsole2(int argc, char *argv[])
 	else if (!_stricmp(sub, "probe")) Probe();
 	else if (!_stricmp(sub, "meta")) MetaCommand(argc > 2 ? argv[2] : "");
 	else if (!_stricmp(sub, "exclude")) Exclude(argc, argv);
+	else if (!_stricmp(sub, "watch")) Watch(argc, argv);
 	else if (!_stricmp(sub, "status"))
 	{
 		size_t n;
@@ -828,7 +1012,7 @@ int __cdecl CMD_LSConsole2(int argc, char *argv[])
 		    g_started ? overlay::Status().c_str() : "not started", n, g_pageReady ? "ready" : "not ready",
 		    g_stockConsole ? "opens this console" : "is the stock one");
 	}
-	else Say("lsconsole2 [toggle|show|hide|status|probe|meta [reload|check]|exclude [<text> [<replacement>]]]");
+	else Say("lsconsole2 [toggle|show|hide|status|probe|meta [reload|check]|exclude [<text> [<replacement>]]|watch [<event or pattern>|-remove <...>|-list|-clear]]");
 	return 0;
 }
 
@@ -858,6 +1042,7 @@ bool LSConsole2::Initialize(ISInterface *p_ISInterface)
 
 void LSConsole2::Shutdown()
 {
+	UnwatchAll(); // first: no event may call into this DLL once it's gone
 	UnwrapConsole();
 	StopFilesWalk();
 	hostlink::Stop();  // first: the host drops this session's view

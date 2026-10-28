@@ -57,6 +57,8 @@ network access and no account.
   datatypes and commands, and you can add or correct entries with a JSON file.
 - **Exclusions.** `lsconsole2 exclude <text> [<replacement>]` keeps text out of completions, for
   example your character's name while recording a video.
+- **Event watching.** `lsconsole2 watch <event or pattern>` prints a line each time an event fires,
+  with its arguments. A pattern like `EQ2_onIncoming*` watches every event it matches.
 
 It also searches the console output: **Ctrl+F** highlights every match and steps through them.
 
@@ -244,6 +246,11 @@ searches. **Up / Down** stay local: they only recall what this session ran since
 | `lsconsole2 exclude <text>` | leave out completions containing the text, and value previews containing it |
 | `lsconsole2 exclude <text> <replacement>` | show the replacement in place of the text in completions and value previews |
 | `lsconsole2 exclude` | list the exclusions (they last until the extension unloads) |
+| `lsconsole2 watch <event>` | print a line each time the event fires, with its arguments |
+| `lsconsole2 watch <pattern>` | watch every registered event the pattern matches (`*` any run, `?` one character, case ignored) |
+| `lsconsole2 watch -remove <event or pattern>` | stop watching the events it matches |
+| `lsconsole2 watch -list` | what is watched, and how many times each has fired |
+| `lsconsole2 watch -clear` | stop watching everything (unloading does too) |
 | `console on\|off\|toggle` | show, hide or toggle LSConsole2 while it's loaded |
 | `console -stock <...>` | the stock `console` command, for example `console -stock on` |
 | `consoleclear` | typed in LSConsole2, clears its output |
@@ -257,11 +264,28 @@ them*: descriptions, parameters, the forms an entry accepts, and what each form 
 from three places, and a later one overrides an earlier one field by field:
 
 1. **Built in.** LavishScript and Inner Space basics, bundled into the extension.
-2. **Published by an extension.** If a loaded extension's top-level object has a `ConsoleMetadata`
-   member returning a `jsonvalue`, LSConsole2 imports it. LSConsole2 checks that the member exists
-   through the SDK first, so extensions without it never see an error.
+2. **Written by an extension.** Every `console_metadata_*.json` in `x64\Extensions\ISXDK35\`. See
+   [Publishing metadata from an extension](#publishing-metadata-from-an-extension).
 3. **Your own files.** Any `*.json` in `x64\Extensions\ConsoleMetadata\`. Use them to document a
    script's commands or to fix an entry.
+
+### Publishing metadata from an extension
+
+Write your document to
+
+```
+InnerSpace\x64\Extensions\ISXDK35\console_metadata_<identifier>.json
+```
+
+where `<identifier>` is your extension's name, optionally followed by `_<specifier>` if you'd rather
+split the metadata over several files: `console_metadata_ISXFoo.json`, or
+`console_metadata_ISXFoo_commands.json` and `console_metadata_ISXFoo_types.json`. Using your own
+extension's name keeps your files from overwriting anyone else's.
+
+Write it when your extension loads, so it always matches the loaded version. Several sessions may
+load at once, so write to a temporary file and rename it over the old one. LSConsole2 reads these
+files when it starts, and again shortly after any extension loads or unloads, so an extension that
+loads after LSConsole2 is picked up too.
 
 A small example:
 

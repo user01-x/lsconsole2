@@ -1,9 +1,10 @@
 // Metadata -- what members, methods, objects, commands and events take and return
 // (README.md, "Console metadata"). Three sources, merged in this order, later ones winning field by field:
 //   1. built-in: RCDATA resources inside this DLL (src/metadata/*.json)
-//   2. published: ${<Object>.ConsoleMetadata~} of a loaded extension, a jsonvalue (LoadPublished)
-//   3. directory: <extensions path>\ConsoleMetadata\*.json
-// Main thread only (it evaluates data sequences).
+//   2. extensions': <extensions path>\ISXDK35\console_metadata_*.json, which an extension writes as
+//      console_metadata_<extensionName>[_<specifier>].json (the user, 2026-10-28)
+//   3. yours: <extensions path>\ConsoleMetadata\*.json
+// Main thread only.
 #include <isxdk.h>
 #include "Metadata.h"
 #include "../common/Protocol.h"
@@ -79,59 +80,12 @@ void LoadBuiltins()
 	EnumResourceNamesA(g_hModule, RT_RCDATA, CollectResource, (LONG_PTR)&g_builtins);
 }
 
-// Whether a type has a ConsoleMetadata member, its own or inherited: asked of the SDK, nothing
-// evaluated.
-bool HasMetadataMember(LSTypeDefinition *def)
+// Every file in `dir` matching `pattern`, in name order.
+void LoadFiles(const std::string &dir, const char *pattern)
 {
-	char member[] = "ConsoleMetadata";
-	for (int depth = 0; def && depth < 16; depth++, def = def->GetInheritance())
-		if (def->FindMember(member)) return true;
-	return false;
-}
-
-// Published metadata (the user, 2026-10-26). Asking for a member that doesn't exist prints an error,
-// so it's found in three steps:
-//   1. every datatype is checked through the SDK for a ConsoleMetadata member (no evaluation);
-//   2. only if one has it, each top-level object's type is read with ${<Object>(type)};
-//   3. the objects of those types are read with ${<Object>.ConsoleMetadata~}.
-void LoadPublished()
-{
-	static std::vector<char> buf(4 << 20);
-	auto read = [](const std::string &seq) {
-		buf[0] = 0;
-		pISInterface->DataParse(seq.c_str(), buf.data(), buf.size());
-		return json::parse(buf.data(), nullptr, false);
-	};
-	std::unordered_set<std::string> publishing; // lower case
-	json types = read("${LavishScript.Types~}");
-	if (types.is_array())
-		for (auto &t : types)
-			if (t.is_string() && HasMetadataMember(pISInterface->FindLSTypeDefinition(t.get<std::string>().c_str())))
-				publishing.insert(Lower(t.get<std::string>()));
-	if (publishing.empty()) return; // the usual case: nothing else is read
-	json tlos = read("${LavishScript.TopLevelObjects~}");
-	if (!tlos.is_array()) return;
-	for (auto &t : tlos)
-	{
-		if (!t.is_string()) continue;
-		std::string name = t.get<std::string>();
-		char type[256] = "";
-		pISInterface->DataParse(("${" + name + "(type)}").c_str(), type, sizeof(type));
-		if (!publishing.count(Lower(type))) continue;
-		json d = read("${" + name + ".ConsoleMetadata~}");
-		if (d.is_discarded()) g_problems.push_back(name + ".ConsoleMetadata: not JSON");
-		else Add(d, "published by " + name);
-	}
-}
-
-void LoadDirectory()
-{
-	char ext[MAX_PATH] = "";
-	pISInterface->GetExtensionsPath(ext, sizeof(ext));
-	g_dir = std::string(ext) + "\\ConsoleMetadata";
 	std::vector<std::string> files;
 	WIN32_FIND_DATAA fd;
-	HANDLE h = FindFirstFileA((g_dir + "\\*.json").c_str(), &fd);
+	HANDLE h = FindFirstFileA((dir + "\\" + pattern).c_str(), &fd);
 	if (h == INVALID_HANDLE_VALUE) return;
 	do { if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) files.push_back(fd.cFileName); } while (FindNextFileA(h, &fd));
 	FindClose(h);
@@ -139,7 +93,7 @@ void LoadDirectory()
 	for (auto &f : files)
 	{
 		FILE *fp = nullptr;
-		if (fopen_s(&fp, (g_dir + "\\" + f).c_str(), "rb") || !fp) { g_problems.push_back(f + ": cannot read"); continue; }
+		if (fopen_s(&fp, (dir + "\\" + f).c_str(), "rb") || !fp) { g_problems.push_back(f + ": cannot read"); continue; }
 		std::string s;
 		char chunk[65536];
 		size_t n;
@@ -171,8 +125,11 @@ void Load()
 	g_problems.clear();
 	LoadBuiltins();
 	for (size_t i = 0; i < g_builtins.size(); i++) Add(g_builtins[i], "built-in");
-	LoadPublished();
-	LoadDirectory();
+	char ext[MAX_PATH] = "";
+	pISInterface->GetExtensionsPath(ext, sizeof(ext));
+	LoadFiles(std::string(ext) + "\\ISXDK35", "console_metadata_*.json"); // what extensions write
+	g_dir = std::string(ext) + "\\ConsoleMetadata";
+	LoadFiles(g_dir, "*.json"); // yours, last: they correct the rest
 	g_loaded = true;
 	g_reloadPending = false;
 }
