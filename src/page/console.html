@@ -629,9 +629,14 @@
   // The type information to complete `chain.` / `chain:` from: documented return types first; the
   // live ${chain(type)} check otherwise -- also while the documented route is still being looked up,
   // so a chain with no documentation doesn't wait on it.
-  function chainInfo(chain) {
+  // `noEval`: never ask the extension to evaluate a chain with [arguments], only use what's known.
+  // The input-line colouring passes it: with brackets auto-closed it would otherwise evaluate every
+  // half-typed argument as it's typed -- ${Actor[Q](type)}, ${Actor[Qu](type)}, ... -- and
+  // ${Actor[Query](type)} crashed ISXEQ2 (the user, 2026-10-28).
+  function chainInfo(chain, noEval) {
     var t = resolveChain(chain);
     if (t && t !== 'pending') { var ti = typeByName(t); if (ti) return ti; }
+    if (noEval && chain.indexOf('[') >= 0) return typeInfo[chain] || null;
     return typeOf(chain);
   }
 
@@ -1387,14 +1392,14 @@
       var rootOk = knownRoot(m[0]);
       mark(at, at + m[0].length, rootOk || typing(at, at + m[0].length) || !objects ? 'tk-obj' : 'tk-bad');
       if (!rootOk) return;
-      var pos = at + m[0].length, info = chainInfo(m[0]);
+      var pos = at + m[0].length, info = chainInfo(m[0], true);
       for (;;) {
         if (v.charAt(pos) === '[') { // arguments: skip to the matching ]
           var depth = 0, j = pos;
           for (; j < v.length; j++) { var c = v.charAt(j); if (c === '[') depth++; else if (c === ']' && --depth === 0) break; }
           if (j >= v.length) return;
           pos = j + 1;
-          info = chainInfo(v.slice(at, pos));
+          info = chainInfo(v.slice(at, pos), true);
         }
         var sep = v.charAt(pos);
         if (sep !== '.' && sep !== ':') return;
@@ -1406,7 +1411,7 @@
         if (!ok && !typing(a, b)) { mark(a, b, 'tk-bad'); return; }
         if (!ok || sep === ':') return; // a method ends what can be followed
         pos = b;
-        info = chainInfo(v.slice(at, pos));
+        info = chainInfo(v.slice(at, pos), true);
       }
     }
 

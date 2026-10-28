@@ -69,5 +69,22 @@ check('nothing to suggest', suggestion('zzz'), '');
 check('not for an empty line', suggestion(''), '');
 check('not for a hist query', suggestion('hist e'), '');
 
+// The colouring never asks for a chain with [arguments] to be evaluated: with brackets auto-closed it
+// would run ${chain(type)} on half-typed arguments, and ${Actor[Query](type)} crashed ISXEQ2. It uses
+// what's already known instead. (The real chainInfo, over stand-ins that record what's evaluated.)
+data.commands = ['echo'];
+data.tlos = ['Me', 'Actor'];
+var evaluated = [], typeInfo = { Me: types.Me, 'Me.Group[1]': types['Me.Group[1]'] };
+function resolveChain() { return null; }
+function typeByName() { return null; }
+function typeOf(c) { evaluated.push(c); return typeInfo[c] || null; }
+eval(grab('chainInfo'));
+words('echo ${Actor[Query]}', 18);
+check('typing inside auto-closed brackets evaluates no argument', evaluated, ['Actor']);
+evaluated = [];
+check('a known chain with arguments is still checked', words('echo ${Me.Group[1].Dist}'),
+      ['echo:cmd', '${:ds', 'Me:obj', 'Dist:bad', '}:ds']);
+check('...without being evaluated', evaluated.filter(c => c.indexOf('[') >= 0), []);
+
 if (failed) { console.log(failed + ' failed'); process.exit(1); }
 console.log('all passed');
